@@ -67,7 +67,7 @@ async function currentRun(trigger: "MANUAL" | "SCHEDULED", onlyUserId?: string) 
  * running) and returns where things stand. Safe to call again at any time.
  */
 export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyUserId?: string; budgetMs?: number } = {}): Promise<ScanSummary> {
-  const deadline = Date.now() + (options.budgetMs ?? 20_000);
+  const deadline = Date.now() + (options.budgetMs ?? 15_000);
   const timeLeft = () => deadline - Date.now();
   let run = await currentRun(trigger, options.onlyUserId);
   const progress = { ...emptyProgress(), ...((run.progress ?? {}) as Partial<Progress>) } as Progress;
@@ -84,6 +84,7 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       const source = await db.jobSource.findFirst({ where: { enabled: true, id: { notIn: progress.sourcesDone } }, orderBy: { name: "asc" } });
       if (!source) {
         phase = "ENRICH";
+        await save();
         break;
       }
       progress.sourcesDone.push(source.id);
@@ -147,15 +148,18 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
     }
 
     // --- ENRICH: read the advert pages feeds only summarised -----------------
-    while (phase === "ENRICH" && timeLeft() > 4_000) {
+    // Each advert page is given 8 seconds, so one is only started with that in hand.
+    while (phase === "ENRICH" && timeLeft() > 9_000) {
       const batch = await db.job.findMany({ where: { enrichedAt: null, closedAt: null }, orderBy: { firstSeenAt: "desc" }, take: 8 });
       if (batch.length === 0) {
         phase = "SCORE";
+        await save();
         break;
       }
       for (const job of batch) {
-        if (timeLeft() < 2_000) break;
+        if (timeLeft() < 9_000) break;
         const full = await enrichJob({ externalId: job.externalId, title: job.title, company: job.company, location: job.location, remote: job.remote, url: job.url, description: job.description, salary: job.salary, postedAt: job.postedAt });
+        // Written per advert, so a cut-off step loses at most one page's work.
         await db.job.update({
           where: { id: job.id },
           data: { title: full.title.slice(0, 300), company: full.company.slice(0, 200), location: full.location.slice(0, 300), remote: full.remote, description: full.description.slice(0, 60_000), salary: full.salary.slice(0, 200), postedAt: full.postedAt, enrichedAt: new Date() },
@@ -173,6 +177,7 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       });
       if (!user) {
         phase = "DRAFTS";
+        await save();
         break;
       }
       progress.usersDone.push(user.id);
@@ -231,7 +236,7 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
         break;
       }
       // Tailoring with AI can take a while; only start one with time in hand.
-      if (timeLeft() < 8_000) break;
+      if (timeLeft() < 10_000) break;
       progress.pendingDrafts.shift();
       try {
         const prefs = await db.preference.findUnique({ where: { userId: next.userId }, select: { autoApprove: true } });

@@ -13,6 +13,6 @@ export async function POST(request: Request) {
   if (!secret || given !== secret) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   const url = new URL(request.url);
   const trigger = request.headers.get("x-trigger") === "SCHEDULED" ? "SCHEDULED" : "MANUAL";
-  const summary = await scanStep(trigger, { onlyUserId: url.searchParams.get("user") ?? undefined, budgetMs: 20_000 });
+  const summary = await scanStep(trigger, { onlyUserId: url.searchParams.get("user") ?? undefined, budgetMs: 15_000 });
   return NextResponse.json(summary);
 }

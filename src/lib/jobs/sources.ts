@@ -52,7 +52,7 @@ const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const UA = "Applya/1.0 (+https://applya.co.uk)";
 
 async function getJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(url, { ...init, headers: { accept: "application/json", "user-agent": UA, ...(init.headers ?? {}) }, signal: AbortSignal.timeout(20_000) });
+  const res = await fetch(url, { ...init, headers: { accept: "application/json", "user-agent": UA, ...(init.headers ?? {}) }, signal: AbortSignal.timeout(12_000) });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${new URL(url).host}`);
   return (await res.json()) as T;
 }
@@ -375,7 +375,7 @@ export function parseFeed(xml: string): FeedItem[] {
 }
 
 async function fetchFeed(url: string) {
-  const res = await fetch(url, { headers: { "user-agent": BROWSER_UA, accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5" }, signal: AbortSignal.timeout(25_000) });
+  const res = await fetch(url, { headers: { "user-agent": BROWSER_UA, accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5" }, signal: AbortSignal.timeout(12_000) });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${new URL(url).host}`);
   const text = await res.text();
   if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(text)) throw new Error(`${new URL(url).host} did not return a feed`);
@@ -611,7 +611,7 @@ function pageText(html: string) {
  */
 export async function enrichJob(job: FoundJob): Promise<FoundJob> {
   try {
-    const res = await fetch(job.url, { headers: { "user-agent": BROWSER_UA, accept: "text/html" }, redirect: "follow", signal: AbortSignal.timeout(20_000) });
+    const res = await fetch(job.url, { headers: { "user-agent": BROWSER_UA, accept: "text/html" }, redirect: "follow", signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return job;
     const html = await res.text();
     const posting = findJobPosting(html);
