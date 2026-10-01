@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { MAIL_PRESETS, saveMailAccount, sendFromUser, type MailPreset } from "@/lib/user-mail";
+import { MAIL_PRESETS, saveMailAccount, sendFromUser, smtpHostFor, type MailPreset } from "@/lib/user-mail";
 import { emailSchema } from "@/lib/validation";
 import { int, str } from "@/lib/utils";
 import type { FormState } from "./auth";
@@ -16,7 +16,7 @@ export async function connectMailbox(_: FormState, formData: FormData): Promise<
   if (!fromEmail.success) return { error: "Enter the email address applications should come from." };
   const username = str(formData.get("username")) || fromEmail.data;
   const password = String(formData.get("password") ?? "");
-  const host = preset === "other" ? str(formData.get("host")) : chosen.host;
+  const host = preset === "other" ? str(formData.get("host")) : smtpHostFor(preset, fromEmail.data, chosen.host);
   const port = preset === "other" ? (int(formData.get("port")) ?? 587) : chosen.port;
   if (!host) return { error: "Enter the SMTP host." };
   if (!password) return { error: "Enter the app password for the mailbox." };

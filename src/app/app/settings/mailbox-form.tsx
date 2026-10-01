@@ -8,7 +8,7 @@ import { Button, Field, Notice } from "@/components/ui";
 
 const presets = [
   { key: "gmail", label: "Gmail / Google Workspace", help: "Turn on 2-step verification, then create an app password at myaccount.google.com/apppasswords and paste it below." },
-  { key: "outlook", label: "Outlook / Hotmail / Microsoft 365", help: "Create an app password under account.microsoft.com → Security → Advanced security options." },
+  { key: "outlook", label: "Outlook / Hotmail / Microsoft 365", help: "Turn on two-step verification at account.microsoft.com → Security, then create an app password under Advanced security options and paste it below." },
   { key: "yahoo", label: "Yahoo", help: "Create an app password under Account security." },
   { key: "icloud", label: "iCloud", help: "Create an app-specific password at appleid.apple.com." },
   { key: "other", label: "Other (enter SMTP details)", help: "Your provider's SMTP host, port and login." },

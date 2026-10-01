@@ -10,13 +10,19 @@ import { sendViaGmail, sendViaOutlook } from "./mail-oauth";
 
 export const MAIL_PRESETS = {
   gmail: { label: "Gmail / Google Workspace", host: "smtp.gmail.com", port: 587, help: "Turn on 2-step verification, then create an app password at myaccount.google.com/apppasswords and use it here." },
-  outlook: { label: "Outlook / Hotmail / Microsoft 365", host: "smtp.office365.com", port: 587, help: "Create an app password under account.microsoft.com → Security → Advanced security options." },
+  outlook: { label: "Outlook / Hotmail / Microsoft 365", host: "smtp.office365.com", port: 587, help: "Personal Outlook, Hotmail and Live addresses: turn on two-step verification at account.microsoft.com → Security, then create an app password under Advanced security options and paste it here. (Microsoft 365 work accounts need SMTP AUTH enabled by their admin.)" },
   yahoo: { label: "Yahoo", host: "smtp.mail.yahoo.com", port: 465, help: "Create an app password under Account security." },
   icloud: { label: "iCloud", host: "smtp.mail.me.com", port: 587, help: "Create an app-specific password at appleid.apple.com." },
   other: { label: "Other (enter SMTP details)", host: "", port: 587, help: "Your provider's SMTP host, port and login." },
 } as const;
 
 export type MailPreset = keyof typeof MAIL_PRESETS;
+
+/** Personal Microsoft addresses use a different SMTP server from Microsoft 365 work accounts. */
+export function smtpHostFor(preset: MailPreset, email: string, fallback: string) {
+  if (preset === "outlook" && /@(outlook|hotmail|live|msn)\./i.test(email)) return "smtp-mail.outlook.com";
+  return fallback;
+}
 
 export interface MailAccountInput {
   host: string;
