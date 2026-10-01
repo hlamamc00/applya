@@ -3,7 +3,7 @@
 // call the app's /api/scan step after step until the run reports done.
 // Started by the scheduled function (scan.mts) and by "Scan now" in the app.
 
-export default async (request: Request) => {
+const handler = async (request: Request) => {
   const secret = process.env.CRON_SECRET;
   const given = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (!secret || given !== secret) return new Response("Unauthorised", { status: 401 });
@@ -32,3 +32,5 @@ export default async (request: Request) => {
   }
   return new Response("", { status: 202 });
 };
+
+export default handler;

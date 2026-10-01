@@ -1,10 +1,11 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { activeProvider, aiAvailable, generateJson, PROVIDER_LABELS } from "./llm";
 import { z } from "zod";
 import type { CvDocument } from "./cv";
 
-// Adapts a profile to one job advert. With ANTHROPIC_API_KEY set and the
-// user's AI tailoring on, Claude rewrites the summary and headline, picks the
+// Adapts a profile to one job advert. With an AI provider configured (see
+// llm.ts: Groq, Gemini, OpenRouter, Cloudflare or Anthropic) and the user's
+// AI tailoring on, the model rewrites the summary and headline, picks the
 // order of skills and bullets, and drafts a short cover message: facts stay
 // as they are in the profile, only the emphasis changes. Without a key, a
 // keyword pass does the reordering and fills in a plain-worded message.
@@ -74,22 +75,27 @@ const aiResult = z.object({
 });
 
 export function aiTailoringAvailable() {
-  return Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  return aiAvailable();
 }
 
-/** Tailors with Claude; falls back to the keyword pass if the key is missing or the call fails. */
+/** What the admin page shows: which service writes the drafts. */
+export function aiTailoringLabel() {
+  const p = activeProvider();
+  return p ? PROVIDER_LABELS[p] : null;
+}
+
+/** Tailors with the AI provider; falls back to the keyword pass if none is set or the call fails. */
 export async function tailor(input: TailorInput, options: { allowAi: boolean }): Promise<TailorOutput> {
   if (!options.allowAi || !aiTailoringAvailable()) return tailorHeuristically(input);
   try {
-    return await tailorWithClaude(input);
+    return await tailorWithAi(input);
   } catch (error) {
     console.error("[tailor] AI tailoring failed, using the keyword pass", error);
     return tailorHeuristically(input);
   }
 }
 
-async function tailorWithClaude(input: TailorInput): Promise<TailorOutput> {
-  const client = new Anthropic();
+async function tailorWithAi(input: TailorInput): Promise<TailorOutput> {
   const { cv, job } = input;
   // Contact, salary and immigration details stay out of the prompt on purpose.
   const profile = {
@@ -109,39 +115,26 @@ async function tailorWithClaude(input: TailorInput): Promise<TailorOutput> {
     .filter(Boolean)
     .join("\n");
 
-  const response = await client.messages.create({
-    model: process.env.TAILOR_MODEL?.trim() || "claude-opus-5-5",
-    max_tokens: 8000,
+  const { data } = await generateJson<unknown>({
     system: [
       "You tailor a candidate's CV and cover message to one job advert for a UK application.",
       "Rules: never invent qualifications, employers, dates, results or figures; every claim must come from the profile given.",
       "Rewrite the headline and summary to lead with what this advert values. Reorder skill groups and the items inside them, and reorder each role's bullets, so the most relevant come first; you may tighten wording but keep each bullet's facts. Return every role's bullets in the same role order as given.",
       "The cover message is 150–220 words, British English, plain and confident, addressed 'Dear Hiring Team' unless the advert names someone, signed with the candidate's name. Mention availability or notice period only if given. Do not mention salary.",
-      "Reply with JSON only, matching the schema; no markdown fences.",
+      'Reply with a single JSON object only, no markdown, exactly this shape: {"headline": string, "summary": string, "skills": [{"group": string, "items": string[]}], "experienceBullets": string[][] (one array per role, same order as the profile), "coverMessage": string}',
     ].join(" "),
-    messages: [
-      {
-        role: "user",
-        content: [
-          `Job title: ${job.title}`,
-          `Employer: ${job.company}`,
-          `Location: ${job.location || "not stated"}`,
-          `Advert:\n${job.description.slice(0, 12_000)}`,
-          ``,
-          `Candidate name: ${cv.name}`,
-          `Profile (JSON):\n${JSON.stringify(profile)}`,
-          facts ? `\nFacts for the message:\n${facts}` : "",
-          ``,
-          `Schema: {"headline": string, "summary": string, "skills": [{"group": string, "items": string[]}], "experienceBullets": string[][] (one array per role, same order as the profile), "coverMessage": string}`,
-        ].join("\n"),
-      },
-    ],
+    user: [
+      `Job title: ${job.title}`,
+      `Employer: ${job.company}`,
+      `Location: ${job.location || "not stated"}`,
+      `Advert:\n${job.description.slice(0, 7_000)}`,
+      ``,
+      `Candidate name: ${cv.name}`,
+      `Profile (JSON):\n${JSON.stringify(profile)}`,
+      facts ? `\nFacts for the message:\n${facts}` : "",
+    ].join("\n"),
   });
-
-  if (response.stop_reason === "refusal") throw new Error("The model declined to tailor this CV");
-  const text = response.content.find((b) => b.type === "text")?.text ?? "";
-  const json = text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-  const parsed = aiResult.parse(JSON.parse(json));
+  const parsed = aiResult.parse(data);
 
   // The model only chooses order and wording of the parts it was asked to;
   // anything it drops is kept from the profile so no fact disappears.

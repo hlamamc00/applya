@@ -25,7 +25,7 @@ Email and password accounts (bcrypt hashes, a signed HttpOnly session cookie tha
 
 ### Profile & CV (`/app/profile`)
 
-Upload an existing CV (PDF, Word or text) and it is read into the fields below: with `ANTHROPIC_API_KEY` Claude does the reading, otherwise a section parser (`src/lib/cv-import.ts`). Nothing is saved until the person has checked the fields and pressed Save; the extracted text is kept on the profile.
+Upload an existing CV (PDF, Word or text) and it is read into the fields below: with an AI provider configured the model does the reading, otherwise a section parser (`src/lib/cv-import.ts`). Nothing is saved until the person has checked the fields and pressed Save; the extracted text is kept on the profile.
 
 The structured content a CV is built from: contact details and links, a headline and summary, professional exams (passed / result awaited / planned), grouped skills, experience with bullets, education and any extra sections a field needs. Separate fields hold availability, notice period, salary expectations, right-to-work wording and visa expiry; these go into draft messages but are never sent to the AI provider. The sections are JSON on `Profile` (`src/lib/cv.ts`), so a user in another field adds whatever their CV needs without a schema change.
 
@@ -55,9 +55,21 @@ Feeds only carry a summary, so the scanner reads each new advert's own page (its
 
 The seed adds The Actuary Jobs (the IFoA's board) and reed.co.uk searches for "actuarial" / "actuary", which need no keys, plus Adzuna and Reed API searches that do, and one public Greenhouse board.
 
-### Tailoring
+### Tailoring and AI providers
 
-`src/lib/tailor.ts` adapts the profile to one advert. With `ANTHROPIC_API_KEY` set and the user's AI tailoring switch on, Claude rewrites the headline and summary, reorders skills and each role's bullets, and drafts a 150–220 word cover message; facts are checked back against the profile so nothing invented survives. Without a key (or with the switch off) a keyword pass does the reordering and fills in a plain-worded message. Each `CvVersion` records which method produced it.
+`src/lib/tailor.ts` adapts the profile to one advert. With an AI provider configured and the user's AI tailoring switch on, the model rewrites the headline and summary, reorders skills and each role's bullets, and drafts a 150–220 word cover message; facts are checked back against the profile so nothing invented survives. Without a key (or with the switch off) a keyword pass does the reordering and fills in a plain-worded message. Each `CvVersion` records which method produced it.
+
+`src/lib/llm.ts` is the one place that talks to a model. Set any one key and it is used (or pick with `AI_PROVIDER`):
+
+| Provider | Key | Cost |
+| --- | --- | --- |
+| Groq | `GROQ_API_KEY` (console.groq.com) | free tier |
+| Google Gemini | `GEMINI_API_KEY` (aistudio.google.com) | free tier |
+| OpenRouter | `OPENROUTER_API_KEY` (openrouter.ai) | free models (`:free`) |
+| Cloudflare Workers AI | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` | free daily allowance |
+| Anthropic Claude | `ANTHROPIC_API_KEY` | paid |
+
+`AI_MODEL` overrides the provider's default model. Web discovery of sources uses Brave Search (`BRAVE_SEARCH_API_KEY`, free tier) or Claude's web search.
 
 ### Applications and approval (`/app/applications`)
 
@@ -84,7 +96,7 @@ All settings are environment variables; `.env.example` lists them.
 | `SITE_URL` | Absolute site URL, for links in emails and the scheduled scan |
 | `CRON_SECRET` | Protects `/api/scan` |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_FIRST_NAME`, `SEED_ADMIN_LAST_NAME` | The first admin account, created by the seed if it doesn't exist |
-| `ANTHROPIC_API_KEY`, `TAILOR_MODEL` | AI tailoring (optional; keyword tailoring without it) |
+| `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_AI_TOKEN` / `ANTHROPIC_API_KEY`, `AI_PROVIDER`, `AI_MODEL` | AI tailoring and CV reading (optional; any one key; keyword tailoring without) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Password-reset and review emails (optional; nothing is sent without them) |
 | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `REED_API_KEY`, `RAPIDAPI_KEY`, `JOOBLE_API_KEY`, `CAREERJET_API_KEY` | The keyed aggregator sources (optional) |
 | `BRAVE_SEARCH_API_KEY` | Web discovery of sources without an Anthropic key (optional) |

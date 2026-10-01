@@ -1,12 +1,13 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { aiAvailable, generateJson } from "./llm";
 import { z } from "zod";
 import type { ProfileInput } from "./actions/profile";
 
 // Reads an uploaded CV (PDF, Word or plain text) and turns it into the
-// profile's fields. With ANTHROPIC_API_KEY, Claude does the reading; without
-// it, a section-by-section parser does its best. Either way the person
-// reviews the result in the profile editor before it is saved.
+// profile's fields. With an AI provider configured (llm.ts) the model does
+// the reading; without one, a section-by-section parser does its best.
+// Either way the person reviews the result in the profile editor before it
+// is saved.
 
 export type ParsedProfile = Omit<ProfileInput, "aiTailoring" | "salaryMin" | "salaryMax" | "salaryNote" | "visaExpiresAt" | "availability" | "noticePeriod" | "rightToWork"> & {
   /** Which method produced it, for the banner. */
@@ -254,32 +255,26 @@ const aiProfile = z.object({
   extraSections: z.array(z.object({ title: short, items: z.array(z.string().max(600)).max(20) })).max(8).default([]),
 });
 
-async function parseCvWithClaude(text: string): Promise<ParsedProfile> {
-  const client = new Anthropic();
-  const response = await client.messages.create({
-    model: process.env.TAILOR_MODEL?.trim() || "claude-opus-5-5",
-    max_tokens: 8000,
+async function parseCvWithAi(text: string): Promise<ParsedProfile> {
+  const { data } = await generateJson<unknown>({
     system: [
       "You convert the text of a CV into structured JSON for a profile editor. Copy facts exactly as written; do not invent, infer or embellish anything that isn't in the text. Leave a field empty when the CV doesn't say.",
       "Dates: experience start/end as YYYY-MM when a month is given, else YYYY; education start/end as YYYY. current=true for a role still held (then end is empty).",
       "qualifications: professional exams, certifications and memberships (not degrees), one per row, with body = the awarding body (e.g. IFoA), status PASSED / PENDING (result awaited or sat) / PLANNED, and date as written.",
       "skills: grouped as the CV groups them (e.g. Technical, Actuarial, Languages); a flat list becomes one group named Skills.",
       "experience bullets: the CV's own bullet points, one string each, most recent role first. extraSections: anything else (interests, volunteering, publications, awards, references).",
-      'Reply with JSON only matching: {"firstName","lastName","headline","summary","phone","location","links":[{"label","url"}],"qualifications":[{"body","name","status","date"}],"skills":[{"group","items":[]}],"experience":[{"title","employer","location","start","end","current","bullets":[]}],"education":[{"institution","qualification","grade","start","end","notes"}],"extraSections":[{"title","items":[]}]}. No markdown fences.',
+      'Reply with a single JSON object only, no markdown, exactly this shape: {"firstName","lastName","headline","summary","phone","location","links":[{"label","url"}],"qualifications":[{"body","name","status","date"}],"skills":[{"group","items":[]}],"experience":[{"title","employer","location","start","end","current","bullets":[]}],"education":[{"institution","qualification","grade","start","end","notes"}],"extraSections":[{"title","items":[]}]}',
     ].join(" "),
-    messages: [{ role: "user", content: text.slice(0, 40_000) }],
+    user: text.slice(0, 30_000),
   });
-  if (response.stop_reason === "refusal") throw new Error("The model declined to read this CV");
-  const out = response.content.find((b) => b.type === "text")?.text ?? "";
-  const json = out.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-  return { method: "AI", ...aiProfile.parse(JSON.parse(json)) };
+  return { method: "AI", ...aiProfile.parse(data) };
 }
 
-/** Reads a CV into profile fields: Claude when a key is set, else the section parser. */
+/** Reads a CV into profile fields: the AI provider when one is set, else the section parser. */
 export async function parseCv(text: string, known: { firstName: string; lastName: string; email: string }): Promise<ParsedProfile> {
-  if (process.env.ANTHROPIC_API_KEY?.trim()) {
+  if (aiAvailable()) {
     try {
-      return await parseCvWithClaude(text);
+      return await parseCvWithAi(text);
     } catch (error) {
       console.error("[cv-import] AI parsing failed, using the section parser", error);
     }

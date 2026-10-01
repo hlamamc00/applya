@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { db } from "@/lib/db";
 import { sourceReady } from "@/lib/jobs/sources";
-import { aiTailoringAvailable } from "@/lib/tailor";
+import { aiTailoringAvailable, aiTailoringLabel } from "@/lib/tailor";
 import { isMailConfigured } from "@/lib/mail";
 import { SOURCE_KIND_LABELS, type SourceKind } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
@@ -26,7 +26,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader eyebrow="Admin" title="Sources and scans" intro={`${jobCount} open adverts in the database.`} action={<AdminScanButton />} />
       <div className="mb-6 flex flex-wrap gap-2 text-sm">
-        <Badge tone={aiTailoringAvailable() ? "green" : "amber"}>{aiTailoringAvailable() ? "AI tailoring on" : "AI tailoring off (no ANTHROPIC_API_KEY)"}</Badge>
+        <Badge tone={aiTailoringAvailable() ? "green" : "amber"}>{aiTailoringAvailable() ? `AI: ${aiTailoringLabel()}` : "AI off (no GROQ_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY)"}</Badge>
         <Badge tone={isMailConfigured() ? "green" : "amber"}>{isMailConfigured() ? "Email on" : "Email off (no SMTP settings)"}</Badge>
         <Badge tone={sourceReady("ADZUNA") ? "green" : "neutral"}>Adzuna {sourceReady("ADZUNA") ? "keys set" : "keys not set"}</Badge>
         <Badge tone={sourceReady("REED") ? "green" : "neutral"}>Reed API {sourceReady("REED") ? "key set" : "key not set"}</Badge>

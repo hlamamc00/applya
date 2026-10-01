@@ -170,7 +170,7 @@ export async function discoverSources(opts: { field: string; keywords: string[];
       report.notes.push(`Brave search failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (!process.env.ANTHROPIC_API_KEY?.trim() && !process.env.BRAVE_SEARCH_API_KEY?.trim()) {
-      report.notes.push("Web discovery needs ANTHROPIC_API_KEY or BRAVE_SEARCH_API_KEY; only keyword feeds were added.");
+      report.notes.push("Web discovery needs BRAVE_SEARCH_API_KEY (free) or ANTHROPIC_API_KEY; only keyword feeds were added.");
     }
   }
 
