@@ -1,0 +1,227 @@
+// Applya data model
+//
+// A multi-user career workspace. Every record that belongs to a person hangs
+// off their User, so accounts are isolated from each other. Each user keeps a
+// career profile (the structured content a CV is built from), job preferences
+// (what the scanner looks for on their behalf), and applications: a job, a
+// tailored CV version, a draft message and an approval trail.
+//
+// Status fields are plain strings; the allowed values are listed inline and
+// enforced in src/lib/types.ts.
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" for local dev; rhel-openssl-3.0.x is what Netlify's functions run.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+// Postgres (Neon in production); DATABASE_URL comes from .env.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                    String        @id @default(cuid())
+  email                 String        @unique
+  passwordHash          String
+  firstName             String
+  lastName              String
+  role                  String        @default("USER") // USER | ADMIN
+  // "Forgot password": a short-lived token emailed to the user.
+  resetTokenHash        String?
+  resetTokenExpiresAt   DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  profile               Profile?
+  preferences           Preference?
+  matches               Match[]
+  applications          Application[]
+  cvVersions            CvVersion[]
+}
+
+/// Attempts at an action (signing in, password emails) per visitor or email,
+/// so repeated tries can be slowed down. The key is a keyed hash, never the value.
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+}
+
+/// The structured content a CV is built from. The sections that vary from
+/// person to person (experience, education, exams, skills, extra sections)
+/// are JSON so a new user can add whatever their field needs without a
+/// schema change; src/lib/cv.ts defines the shapes.
+model Profile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline        String   @default("")
+  summary         String   @default("")
+  phone           String   @default("")
+  location        String   @default("")
+  links           Json     @default("[]") // [{label, url}]
+  qualifications  Json     @default("[]") // [{body, name, status: PASSED|PENDING|PLANNED, date}]
+  skills          Json     @default("[]") // [{group, items: string[]}]
+  experience      Json     @default("[]") // [{title, employer, location, start, end, current, bullets: string[]}]
+  education       Json     @default("[]") // [{institution, qualification, grade, start, end, notes}]
+  extraSections   Json     @default("[]") // [{title, items: string[]}]
+  // Details drafts draw on but never send to an AI provider.
+  availability    String   @default("")
+  noticePeriod    String   @default("")
+  salaryMin       Int?
+  salaryMax       Int?
+  salaryNote      String   @default("")
+  rightToWork     String   @default("") // free text, e.g. "Dependant visa, no sponsorship needed"
+  visaExpiresAt   DateTime?
+  aiTailoring     Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+}
+
+/// What the scanner looks for on this user's behalf.
+model Preference {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keywords         Json     @default("[]") // words a title or description should contain
+  excludeKeywords  Json     @default("[]") // words that rule a job out
+  locations        Json     @default("[]") // e.g. ["United Kingdom", "London", "Remote"]
+  levels           Json     @default("[]") // ENTRY | GRADUATE | PART_QUALIFIED | MID | SENIOR
+  areas            Json     @default("[]") // free text areas within the field, e.g. "pensions"
+  minScore         Int      @default(40)   // matches below this aren't shown
+  dailyScan        Boolean  @default(true)
+  autoApprove      Boolean  @default(false) // drafts skip the review step
+  reviewEmails     Boolean  @default(true)
+  updatedAt        DateTime @updatedAt
+}
+
+/// A place jobs are read from. Public ATS boards need no key (Greenhouse,
+/// Lever, Ashby, Workable); aggregators (Adzuna, Reed) use the keys in .env
+/// and the query stored here.
+model JobSource {
+  id          String    @id @default(cuid())
+  kind        String // GREENHOUSE | LEVER | ASHBY | WORKABLE | ADZUNA | REED
+  name        String
+  // Board token / company slug for ATS boards, search terms for aggregators.
+  config      Json      @default("{}")
+  enabled     Boolean   @default(true)
+  lastScanAt  DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  jobs        Job[]
+
+  @@unique([kind, name])
+}
+
+/// A job advert as found on a source. Shared by every user; what each user
+/// thinks of it lives on their Match.
+model Job {
+  id            String        @id @default(cuid())
+  sourceId      String
+  source        JobSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalId    String
+  title         String
+  company       String
+  location      String        @default("")
+  remote        Boolean       @default(false)
+  url           String
+  applyEmail    String?
+  description   String        @default("")
+  salary        String        @default("")
+  postedAt      DateTime?
+  firstSeenAt   DateTime      @default(now())
+  lastSeenAt    DateTime      @default(now())
+  closedAt      DateTime?
+  matches       Match[]
+  applications  Application[]
+
+  @@unique([sourceId, externalId])
+  @@index([firstSeenAt])
+}
+
+/// How well a job fits one user's preferences, and what they did about it.
+model Match {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  score     Int
+  reasons   Json     @default("[]") // short strings explaining the score
+  status    String   @default("NEW") // NEW | SHORTLISTED | DISMISSED | DRAFTED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, jobId])
+  @@index([userId, score])
+}
+
+/// A tailored CV: the profile content as adapted for one job, frozen so the
+/// version that was approved can always be reproduced.
+model CvVersion {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applicationId String?
+  application   Application?  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  label         String
+  content       Json          // CvDocument, see src/lib/cv.ts
+  method        String        @default("MANUAL") // MANUAL | HEURISTIC | AI
+  createdAt     DateTime      @default(now())
+  approvedFor   Application[] @relation("ApprovedCv")
+
+  @@index([applicationId])
+}
+
+/// One application for one job, from draft to sent.
+model Application {
+  id             String      @id @default(cuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId          String
+  job            Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status         String      @default("DRAFT") // DRAFT | IN_REVIEW | APPROVED | SUBMITTED | WITHDRAWN | REJECTED | INTERVIEW | OFFER
+  coverMessage   String      @default("")
+  notes          String      @default("")
+  // Approval is tied to the exact CV version reviewed; editing the CV after
+  // approval clears it so the new version is reviewed again.
+  approvedCvId   String?
+  approvedCv     CvVersion?  @relation("ApprovedCv", fields: [approvedCvId], references: [id], onDelete: SetNull)
+  approvedAt     DateTime?
+  submittedAt    DateTime?
+  submittedVia   String?     // LINK | EMAIL | MANUAL
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  cvVersions     CvVersion[]
+  events         ApplicationEvent[]
+
+  @@unique([userId, jobId])
+  @@index([userId, status])
+}
+
+/// The history shown on an application: created, tailored, approved, sent...
+model ApplicationEvent {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  kind          String
+  detail        String      @default("")
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId, createdAt])
+}
+
+/// One run of the scanner, for the admin page.
+model ScanRun {
+  id          String    @id @default(cuid())
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  trigger     String    @default("MANUAL") // MANUAL | SCHEDULED
+  jobsFound   Int       @default(0)
+  jobsNew     Int       @default(0)
+  matchesNew  Int       @default(0)
+  draftsNew   Int       @default(0)
+  errors      Json      @default("[]")
+}

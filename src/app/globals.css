@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens: the brand's three colours (Applya Navy, Growth Green,
+ * Paper) plus a short neutral scale. Headings are set in a serif, like the
+ * sign-in page; everything else in the system sans.
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+
+  --color-*: initial;
+  --color-navy: #0e1a3a;
+  --color-navy-soft: #203254;
+  --color-green: #0fa968;
+  --color-green-soft: #e2f5ec;
+  --color-paper: #f6f5f1;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-ink: #0e1a3a;
+  --color-graphite: #60737b;
+  --color-steel: #9aa8ae;
+  --color-mist: #dce4e6;
+  --color-cloud: #f1f4f5;
+  --color-amber: #b45309;
+  --color-amber-soft: #fdf1e2;
+  --color-red: #b91c1c;
+  --color-red-soft: #fde8e8;
+  --color-blue: #1d4ed8;
+  --color-blue-soft: #e4ecfc;
+  --color-transparent: transparent;
+}
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+a {
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+/* Form controls share one look. */
+.input,
+.select,
+.textarea {
+  @apply w-full rounded-md border border-mist bg-white px-3 py-2 text-[15px] text-ink outline-none transition-[border-color,box-shadow];
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--color-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-green) 25%, transparent);
+}
+.textarea {
+  @apply min-h-24 leading-relaxed;
+}
+.label {
+  @apply mb-1 block text-sm font-semibold text-ink;
+}
+.hint {
+  @apply mt-1 text-xs text-graphite;
+}
+
+.eyebrow {
+  @apply text-[11px] font-semibold uppercase tracking-[0.2em] text-graphite;
+}
+
+.prose-legal h2 {
+  @apply mt-8 mb-2 font-serif text-xl;
+}
+.prose-legal p {
+  @apply mb-3 leading-relaxed text-ink/90;
+}

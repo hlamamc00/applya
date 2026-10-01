@@ -1,0 +1,29 @@
+# Netlify build settings.
+#
+# webpack rather than Turbopack on purpose: a Turbopack build made on Windows
+# emits hashed symlinks for @prisma/client that don't survive the upload to
+# Netlify's Linux runtime. webpack resolves externals by name instead.
+[build]
+  command = "npm run build:netlify"
+  publish = ".next"
+
+# Production builds first bring the database up to date with
+# prisma/schema.prisma, so a merged schema change can't break the site. db
+# push only makes changes that keep data: one that would lose data stops the
+# build and has to be applied by hand. Schema changes go through Neon's
+# direct connection rather than its pooler: DATABASE_URL_UNPOOLED if set,
+# otherwise DATABASE_URL without "-pooler" in the host.
+[context.production]
+  command = "DATABASE_URL=\"${DATABASE_URL_UNPOOLED:-${DATABASE_URL/-pooler./.}}\" npx prisma db push --skip-generate && npm run build:netlify"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# The daily job scan (netlify/functions/scan.mts) runs on the schedule in that
+# file. It calls the app's own /api/scan with CRON_SECRET.
+
+# Required environment variables (Site configuration → Environment variables):
+#   DATABASE_URL  – Postgres connection string (Neon, pooled)
+#   AUTH_SECRET   – 32+ random characters used to sign login cookies
+#   CRON_SECRET   – random string the scheduled scan uses to call /api/scan
+#   SITE_URL      – https://applya.co.uk
