@@ -1,0 +1,54 @@
+# Keeps the Neon production database in step with prisma/schema.prisma, and
+# seeds it on request. Uses the credentials the Neon GitHub integration adds
+# to this repository: the NEON_API_KEY secret and the NEON_PROJECT_ID variable.
+#
+# Runs automatically when the schema changes on main, and by hand from the
+# Actions tab (where "seed" creates the first admin from the SEED_* secrets:
+# SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD, SEED_ADMIN_FIRST_NAME, SEED_ADMIN_LAST_NAME).
+name: Neon database
+
+on:
+  push:
+    branches: [main]
+    paths: [prisma/schema.prisma]
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Run the seed after the schema push (admin account and default sources)"
+        type: boolean
+        default: false
+
+concurrency: neon-production
+
+jobs:
+  push-schema:
+    runs-on: ubuntu-latest
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Get the production connection string
+        run: |
+          test -n "$NEON_API_KEY" || { echo "NEON_API_KEY secret is missing: connect the repository in Neon → Integrations → GitHub"; exit 1; }
+          test -n "$NEON_PROJECT_ID" || { echo "NEON_PROJECT_ID variable is missing"; exit 1; }
+          URL=$(npx --yes neon@latest connection-string production --project-id "$NEON_PROJECT_ID" --api-key "$NEON_API_KEY")
+          echo "::add-mask::$URL"
+          echo "DATABASE_URL=$URL" >> "$GITHUB_ENV"
+      - name: Push the schema
+        run: npx prisma db push --skip-generate
+      - name: Seed
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.seed }}
+        env:
+          SEED_ADMIN_EMAIL: ${{ secrets.SEED_ADMIN_EMAIL }}
+          SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
+          SEED_ADMIN_FIRST_NAME: ${{ secrets.SEED_ADMIN_FIRST_NAME }}
+          SEED_ADMIN_LAST_NAME: ${{ secrets.SEED_ADMIN_LAST_NAME }}
+        run: |
+          test -n "$SEED_ADMIN_EMAIL" && test -n "$SEED_ADMIN_PASSWORD" || { echo "Add the SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD secrets first"; exit 1; }
+          npx tsx prisma/seed.ts
