@@ -51,6 +51,15 @@ export function mailFrom() {
   return user.includes("@") ? `${BRAND.name} <${user}>` : `${BRAND.name} <no-reply@${BRAND.domain}>`;
 }
 
+/**
+ * Whether this code runs on Netlify (build, function or the Next server
+ * handler, which doesn't always carry NETLIFY itself).
+ */
+export function onNetlify() {
+  const e = process.env;
+  return Boolean(e.NETLIFY || e.NETLIFY_DEV || e.SITE_NAME || e.DEPLOY_ID || e.NETLIFY_IMAGES_CDN_DOMAIN || /\.netlify\.app$/.test(e.URL ?? "") || e.AWS_LAMBDA_FUNCTION_NAME);
+}
+
 export function siteUrl() {
   return (process.env.SITE_URL ?? process.env.URL ?? "http://localhost:3000").replace(/\/$/, "");
 }

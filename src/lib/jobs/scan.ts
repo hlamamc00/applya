@@ -5,7 +5,7 @@ import { connectors, enrichJob, needsEnrichment, sourceReady, type FoundJob, typ
 import { DRAFT_THRESHOLD, scoreJob, type MatchPreferences } from "./matching";
 import { prepareDraft } from "@/lib/applications";
 import { applyEmailFor, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
-import { sendMail, simpleEmail, siteUrl } from "@/lib/mail";
+import { onNetlify, sendMail, simpleEmail, siteUrl } from "@/lib/mail";
 
 // One scan: read every enabled source, store the adverts, read the advert
 // pages that feeds only summarised, score every open advert for each user
@@ -314,7 +314,7 @@ export async function scanInProgress() {
  */
 export async function startScan(trigger: "MANUAL" | "SCHEDULED", options: { onlyUserId?: string } = {}): Promise<{ started: boolean; message: string; summary?: ScanSummary }> {
   if (await scanInProgress()) return { started: false, message: "A scan is already running. New matches appear as it goes; check back in a few minutes." };
-  if (process.env.NETLIFY && process.env.CRON_SECRET) {
+  if (onNetlify() && process.env.CRON_SECRET) {
     const params = options.onlyUserId ? `?user=${encodeURIComponent(options.onlyUserId)}` : "";
     // The site's own netlify.app address works whatever state the custom domain is in.
     const internal = process.env.SITE_NAME ? `https://${process.env.SITE_NAME}.netlify.app` : siteUrl();

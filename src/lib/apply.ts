@@ -5,7 +5,7 @@ import { renderCvPdf } from "./cv-pdf";
 import { latestCv } from "./applications";
 import { aiAvailable, generateJson } from "./llm";
 import { sendFromUser } from "./user-mail";
-import { isMailConfigured, sendMail, simpleEmail, siteUrl } from "./mail";
+import { isMailConfigured, onNetlify, sendMail, simpleEmail, siteUrl } from "./mail";
 import type { MailAttachment } from "./mail";
 import { fileSafeName } from "./utils";
 import type { ApplyPacket, FormField, PlannedValue } from "./apply-runner";
@@ -114,7 +114,7 @@ export async function startSiteApply(applicationId: string, mode: "LIVE" | "PREV
     await db.application.update({ where: { id: applicationId }, data: { events: { create: { kind: "PREVIEW", detail: "Filling in the employer's form without submitting, to show what would be sent" } } } });
   }
   const secret = process.env.CRON_SECRET;
-  if (process.env.NETLIFY && secret) {
+  if (onNetlify() && secret) {
     const internal = process.env.SITE_NAME ? `https://${process.env.SITE_NAME}.netlify.app` : siteUrl();
     const res = await fetch(`${internal}/.netlify/functions/apply-background`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" }, body: JSON.stringify({ applicationId, attemptId: attempt.id }) });
     if (res.status !== 202 && !res.ok) {

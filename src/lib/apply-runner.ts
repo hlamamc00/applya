@@ -181,6 +181,30 @@ function looksLikeLogin(fields: FormField[]) {
   return fields.some((f) => f.type === "password") && !fields.some((f) => f.type === "file");
 }
 
+/** Clears a cookie banner that would otherwise sit over the form. */
+async function dismissCookieBanner(page: Page) {
+  const clicked = await page.evaluate(`(() => {
+    const els = [...document.querySelectorAll("button, a[role='button'], [role='button']")];
+    const hit = els.find((el) => /^(accept( all)?( cookies)?|allow all|i agree|agree|got it|ok(ay)?)$/i.test((el.textContent || "").replace(/\\s+/g, " ").trim()) && el.offsetParent !== null);
+    if (hit) { hit.click(); return true; }
+    return false;
+  })()`).catch(() => false);
+  if (clicked) await sleep(800);
+}
+
+/** Ticks a reCAPTCHA "I'm not a robot" box; a challenge afterwards is still a stop. */
+async function tickCaptchaBox(page: Page, log: string[]) {
+  for (const frame of page.frames()) {
+    if (!/recaptcha\/api2\/anchor|recaptcha\/enterprise\/anchor/.test(frame.url())) continue;
+    const box = await frame.$("#recaptcha-anchor").catch(() => null);
+    if (!box) continue;
+    await box.click().catch(() => {});
+    await sleep(2500);
+    log.push("Ticked \"I'm not a robot\"");
+    return;
+  }
+}
+
 async function hasCaptchaChallenge(page: Page) {
   return page
     .evaluate(() => {
@@ -392,6 +416,7 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
     if (!looksLikeForm(fields) && !stepStart) return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
     say(`Found a form with ${fields.length} fields at ${page.url()}`);
+    await dismissCookieBanner(page);
 
     // 2. Fill page after page (multi-step forms), at most 6 steps.
     for (let step = 0; step < 10; step += 1) {
@@ -418,6 +443,7 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
       if (packet.dryRun && submit) return finish("PREVIEWED", missing.length ? `Filled in, not submitted (preview). Additional information required: ${missing.join("; ")}.` : "Filled in, not submitted (preview).");
       // Never guess: stop here and ask rather than submit a half-answered form.
       if (missing.length) return finish("NEEDS_YOU", `Additional information required: ${missing.join("; ")}. Add it to your profile (or answer on the site) and try again.`);
+      await tickCaptchaBox(page, log);
       if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site is showing a CAPTCHA, which has to be solved by a person.");
       const button = (submit ?? next)!;
       const label = await button.evaluate((e) => (e.innerText || (e as HTMLInputElement).value || "").trim());
