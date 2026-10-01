@@ -2,9 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { firstIssue } from "@/lib/validation";
+import { extractCvText, MAX_CV_BYTES, parseCv } from "@/lib/cv-import";
 import type { FormState } from "./auth";
 
 const short = z.string().trim().max(200);
@@ -82,9 +84,40 @@ export async function saveProfile(_: FormState, formData: FormData): Promise<For
     db.profile.upsert({
       where: { userId: user.id },
       create: { userId: user.id, ...profile, visaExpiresAt: visa && !Number.isNaN(visa.getTime()) ? visa : null },
-      update: { ...profile, visaExpiresAt: visa && !Number.isNaN(visa.getTime()) ? visa : null },
+      // Saving is the review the import was waiting for.
+      update: { ...profile, visaExpiresAt: visa && !Number.isNaN(visa.getTime()) ? visa : null, pendingImport: Prisma.DbNull },
     }),
   ]);
   revalidatePath("/app", "layout");
   return { ok: "Profile saved." };
+}
+
+/** Reads an uploaded CV into the profile fields, for review on the profile page. */
+export async function importCv(_: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser("/app/profile");
+  const file = formData.get("cv");
+  if (!(file instanceof File) || file.size === 0) return { error: "Choose a CV file first." };
+  if (file.size > MAX_CV_BYTES) return { error: "That file is over 5 MB. Export a smaller PDF and try again." };
+  let text: string;
+  try {
+    text = (await extractCvText({ name: file.name, type: file.type, bytes: Buffer.from(await file.arrayBuffer()) })).trim();
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "The file couldn't be read." };
+  }
+  if (text.length < 80) return { error: "No readable text was found in that file. If it's a scanned image, export the CV as a text PDF or Word document." };
+  const parsed = await parseCv(text, { firstName: user.firstName, lastName: user.lastName, email: user.email });
+  await db.profile.upsert({
+    where: { userId: user.id },
+    create: { userId: user.id, cvFileName: file.name, cvText: text.slice(0, 100_000), cvUploadedAt: new Date(), pendingImport: parsed as object },
+    update: { cvFileName: file.name, cvText: text.slice(0, 100_000), cvUploadedAt: new Date(), pendingImport: parsed as object },
+  });
+  revalidatePath("/app/profile");
+  return { ok: `Read ${file.name}${parsed.method === "AI" ? " with AI" : ""}: ${parsed.experience.length} roles, ${parsed.education.length} qualifications, ${parsed.skills.reduce((n, g) => n + g.items.length, 0)} skills. Check the fields below and press Save.` };
+}
+
+/** Forgets an import without saving it. */
+export async function discardImport() {
+  const user = await requireUser("/app/profile");
+  await db.profile.update({ where: { userId: user.id }, data: { pendingImport: Prisma.DbNull } });
+  revalidatePath("/app/profile");
 }

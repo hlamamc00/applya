@@ -7,9 +7,12 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { parseCv } from "@/lib/cv";
 import { latestCv, prepareDraft, saveCvVersion } from "@/lib/applications";
-import { runScan } from "@/lib/jobs/scan";
+import { startScan } from "@/lib/jobs/scan";
 import { isApplicationStatus } from "@/lib/types";
-import { str } from "@/lib/utils";
+import { fileSafeName, str } from "@/lib/utils";
+import { renderCvPdf } from "@/lib/cv-pdf";
+import { sendFromUser } from "@/lib/user-mail";
+import { emailSchema } from "@/lib/validation";
 import type { FormState } from "./auth";
 
 async function ownedApplication(id: string, userId: string) {
@@ -40,10 +43,9 @@ export async function setMatchStatus(formData: FormData) {
 
 export async function scanNow(): Promise<FormState> {
   const user = await requireUser("/app/jobs");
-  const summary = await runScan("MANUAL", { onlyUserId: user.id });
+  const result = await startScan("MANUAL", { onlyUserId: user.id });
   revalidatePath("/app", "layout");
-  const errors = summary.errors.length ? ` ${summary.errors.length} source${summary.errors.length === 1 ? "" : "s"} couldn't be read.` : "";
-  return { ok: `Scan finished: ${summary.jobsFound} adverts read, ${summary.jobsNew} new, ${summary.matchesNew} new matches, ${summary.draftsNew} drafts prepared.${errors}` };
+  return result.started ? { ok: result.message } : { error: result.message };
 }
 
 export async function saveMessage(_: FormState, formData: FormData): Promise<FormState> {
@@ -167,4 +169,43 @@ export async function deleteApplication(formData: FormData) {
   await db.match.updateMany({ where: { userId: user.id, jobId: app.jobId, status: "DRAFTED" }, data: { status: "NEW" } });
   revalidatePath("/app", "layout");
   redirect("/app/applications");
+}
+
+/** Sends the approved CV and message from the user's own mailbox and marks the application submitted. */
+export async function sendByEmail(_: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser("/app/applications");
+  const app = await ownedApplication(str(formData.get("id")), user.id);
+  if (app.status !== "APPROVED") return { error: "Approve the application first; only the approved version is sent." };
+  const to = emailSchema.safeParse(formData.get("to"));
+  if (!to.success) return { error: "Enter the employer's email address." };
+  const subject = str(formData.get("subject")).slice(0, 200);
+  if (!subject) return { error: "Give the email a subject." };
+  const version = app.approvedCvId ? await db.cvVersion.findUnique({ where: { id: app.approvedCvId } }) : await latestCv(app.id);
+  if (!version) return { error: "No approved CV version to attach." };
+  const pdf = await renderCvPdf(parseCv(version.content));
+  let messageId: string;
+  try {
+    messageId = await sendFromUser(user.id, {
+      to: to.data,
+      subject,
+      text: app.coverMessage,
+      attachments: [{ filename: `${fileSafeName(user.firstName, user.lastName)}_CV.pdf`, content: Buffer.from(pdf), contentType: "application/pdf" }],
+    });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+  await db.application.update({
+    where: { id: app.id },
+    data: {
+      status: "SUBMITTED",
+      submittedAt: new Date(),
+      submittedVia: "EMAIL",
+      applyEmail: to.data,
+      sentTo: to.data,
+      sentMessageId: messageId,
+      events: { create: { kind: "SUBMITTED", detail: `Sent by email to ${to.data} from your mailbox (CV version "${version.label}")` } },
+    },
+  });
+  revalidatePath("/app", "layout");
+  return { ok: `Sent to ${to.data}. A copy is in your mailbox's Sent folder.` };
 }

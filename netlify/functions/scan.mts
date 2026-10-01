@@ -1,7 +1,7 @@
 import type { Config } from "@netlify/functions";
 
-// The daily job scan. Netlify runs this on the schedule below (UTC) and it
-// asks the app to scan, so the scanner itself lives with the rest of the code.
+// The daily job scan. Netlify runs this on the schedule below (UTC); it hands
+// the work to scan-background.mts, which may run for up to 15 minutes.
 
 const handler = async () => {
   const site = (process.env.SITE_URL ?? process.env.URL ?? "").replace(/\/$/, "");
@@ -10,8 +10,8 @@ const handler = async () => {
     console.error("[scan] SITE_URL and CRON_SECRET must be set");
     return;
   }
-  const res = await fetch(`${site}/api/scan`, { method: "POST", headers: { authorization: `Bearer ${secret}` } });
-  console.log(`[scan] ${res.status}: ${await res.text()}`);
+  const res = await fetch(`${site}/.netlify/functions/scan-background`, { method: "POST", headers: { authorization: `Bearer ${secret}`, "x-trigger": "SCHEDULED" } });
+  console.log(`[scan] background scan started: ${res.status}`);
 };
 
 export const config: Config = {

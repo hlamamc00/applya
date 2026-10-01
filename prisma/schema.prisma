@@ -38,6 +38,25 @@ model User {
   matches               Match[]
   applications          Application[]
   cvVersions            CvVersion[]
+  mailAccount           MailAccount?
+}
+
+/// The person's own mailbox, so applications go out from their address.
+/// SMTP works with any provider (Gmail and Outlook with an app password);
+/// the password is encrypted with a key derived from AUTH_SECRET.
+model MailAccount {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  host          String
+  port          Int       @default(587)
+  username      String
+  passwordEnc   String
+  fromName      String    @default("")
+  fromEmail     String
+  verifiedAt    DateTime?
+  lastError     String?
+  updatedAt     DateTime  @updatedAt
 }
 
 /// Attempts at an action (signing in, password emails) per visitor or email,
@@ -77,6 +96,12 @@ model Profile {
   rightToWork     String   @default("") // free text, e.g. "Dependant visa, no sponsorship needed"
   visaExpiresAt   DateTime?
   aiTailoring     Boolean  @default(true)
+  // The last CV file uploaded: its name, the text read from it, and what
+  // the parser made of it, held until the person reviews and saves it.
+  cvFileName      String?
+  cvText          String?
+  cvUploadedAt    DateTime?
+  pendingImport   Json?
   updatedAt       DateTime @updatedAt
 }
 
@@ -102,11 +127,15 @@ model Preference {
 /// and the query stored here.
 model JobSource {
   id          String    @id @default(cuid())
-  kind        String // GREENHOUSE | LEVER | ASHBY | WORKABLE | ADZUNA | REED
+  kind        String // see SOURCE_KINDS in src/lib/types.ts
   name        String
-  // Board token / company slug for ATS boards, search terms for aggregators.
+  // Board token / company slug for ATS boards, search terms for aggregators,
+  // a feed URL for RSS. config.auto marks one added by discovery or from a
+  // user's keywords rather than by hand.
   config      Json      @default("{}")
   enabled     Boolean   @default(true)
+  // Who the source was found for, when discovery added it.
+  createdById String?
   lastScanAt  DateTime?
   lastError   String?
   createdAt   DateTime  @default(now())
@@ -134,6 +163,8 @@ model Job {
   firstSeenAt   DateTime      @default(now())
   lastSeenAt    DateTime      @default(now())
   closedAt      DateTime?
+  // Set once the advert's own page has been read (feeds only carry a summary).
+  enrichedAt    DateTime?
   matches       Match[]
   applications  Application[]
 
@@ -192,6 +223,10 @@ model Application {
   approvedAt     DateTime?
   submittedAt    DateTime?
   submittedVia   String?     // LINK | EMAIL | MANUAL
+  // Email applications: where it went and the provider's message id.
+  applyEmail     String?
+  sentTo         String?
+  sentMessageId  String?
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
   cvVersions     CvVersion[]
@@ -213,11 +248,17 @@ model ApplicationEvent {
   @@index([applicationId, createdAt])
 }
 
-/// One run of the scanner, for the admin page.
+/// One run of the scanner. A run is done in short steps (each HTTP call to
+/// /api/scan does ~20 seconds of work) so it fits serverless time limits;
+/// progress holds where the run has got to between steps.
 model ScanRun {
   id          String    @id @default(cuid())
   startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
   finishedAt  DateTime?
+  status      String    @default("RUNNING") // RUNNING | DONE | FAILED
+  phase       String    @default("SOURCES") // SOURCES | ENRICH | SCORE | DRAFTS | DONE
+  progress    Json      @default("{}")
   trigger     String    @default("MANUAL") // MANUAL | SCHEDULED
   jobsFound   Int       @default(0)
   jobsNew     Int       @default(0)

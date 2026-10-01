@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { runScan } from "@/lib/jobs/scan";
+import { startScan } from "@/lib/jobs/scan";
+import { discoverSources } from "@/lib/jobs/discover";
+import { list } from "@/lib/utils";
 import { SOURCE_KINDS, type SourceKind } from "@/lib/types";
 import { int, str } from "@/lib/utils";
 import type { FormState } from "./auth";
@@ -16,6 +18,7 @@ export async function saveSource(_: FormState, formData: FormData): Promise<Form
   if (!SOURCE_KINDS.includes(kind)) return { error: "Choose a kind of source." };
   if (!name) return { error: "Give the source a name." };
   const config = {
+    url: str(formData.get("url")) || undefined,
     token: str(formData.get("token")) || undefined,
     query: str(formData.get("query")) || undefined,
     where: str(formData.get("where")) || undefined,
@@ -24,7 +27,8 @@ export async function saveSource(_: FormState, formData: FormData): Promise<Form
   };
   const isBoard = ["GREENHOUSE", "LEVER", "ASHBY", "WORKABLE"].includes(kind);
   if (isBoard && !config.token) return { error: "A board source needs the company's board token or slug." };
-  if (!isBoard && !config.query) return { error: "A search source needs search terms." };
+  if (kind === "RSS" && !config.url) return { error: "A feed source needs the feed URL." };
+  if (!isBoard && kind !== "RSS" && !config.query) return { error: "A search source needs search terms." };
   const data = { kind, name, config, enabled: formData.get("enabled") !== "off" };
   if (id) {
     await db.jobSource.update({ where: { id }, data });
@@ -53,9 +57,11 @@ export async function deleteSource(formData: FormData) {
 
 export async function adminScan(): Promise<FormState> {
   await requireAdmin();
-  const s = await runScan("MANUAL");
+  const result = await startScan("MANUAL");
   revalidatePath("/admin", "layout");
-  return { ok: `${s.jobsFound} adverts read, ${s.jobsNew} new, ${s.matchesNew} new matches, ${s.draftsNew} drafts.${s.errors.length ? ` Errors: ${s.errors.join("; ")}` : ""}` };
+  if (!result.started) return { error: result.message };
+  const s = result.summary;
+  return { ok: s ? `${result.message}${s.errors.length ? ` Errors: ${s.errors.join("; ")}` : ""}` : result.message };
 }
 
 export async function setRole(formData: FormData) {
@@ -65,4 +71,25 @@ export async function setRole(formData: FormData) {
   if (id === admin.id) return;
   await db.user.update({ where: { id }, data: { role } });
   revalidatePath("/admin/users");
+}
+
+function describe(report: Awaited<ReturnType<typeof discoverSources>>) {
+  const parts = [
+    report.added.length ? `Added ${report.added.length}: ${report.added.map((a) => `${a.name} (${a.jobs} adverts)`).join(", ")}.` : "Nothing new was added.",
+    report.alreadyThere.length ? `Already there: ${report.alreadyThere.join(", ")}.` : "",
+    report.rejected.length ? `Didn't work: ${report.rejected.map((r) => `${r.name} – ${r.reason}`).join("; ")}.` : "",
+    ...report.notes,
+  ];
+  return parts.filter(Boolean).join(" ");
+}
+
+/** Admin → "Find sources for a field". */
+export async function adminDiscover(_: FormState, formData: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const field = str(formData.get("field"));
+  const keywords = list(formData.get("keywords"));
+  if (!field && keywords.length === 0) return { error: "Say what field to look for." };
+  const report = await discoverSources({ field, keywords: keywords.length ? keywords : [field], where: str(formData.get("where")) || undefined, userId: admin.id, useWeb: formData.get("web") === "on" });
+  revalidatePath("/admin", "layout");
+  return { ok: describe(report) };
 }

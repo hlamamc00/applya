@@ -8,7 +8,11 @@ import bcrypt from "bcryptjs";
 const db = new PrismaClient();
 
 const SOURCES: { kind: string; name: string; config: Record<string, string | number> }[] = [
-  // Aggregators cover most UK actuarial adverts; they need the keys in .env.
+  // Keyless: the IFoA's own job board and reed.co.uk's public search feed.
+  { kind: "RSS", name: "The Actuary Jobs (IFoA)", config: { url: "https://www.theactuaryjobs.com/jobsrss/?keywords=&page={page}", pages: 5 } },
+  { kind: "REED_RSS", name: "Reed: actuarial", config: { query: "actuarial", pages: 4 } },
+  { kind: "REED_RSS", name: "Reed: actuary", config: { query: "actuary", pages: 4 } },
+  // Aggregators cover more; they need the keys in .env.
   { kind: "ADZUNA", name: "Adzuna: actuarial (UK)", config: { query: "actuarial", days: 7 } },
   { kind: "ADZUNA", name: "Adzuna: actuary (UK)", config: { query: "actuary", days: 7 } },
   { kind: "REED", name: "Reed: actuarial (UK)", config: { query: "actuarial", days: 7 } },

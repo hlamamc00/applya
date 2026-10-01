@@ -9,6 +9,7 @@ import { deleteSource, toggleSource } from "@/lib/actions/admin";
 import { Badge, Button, Card, CardTitle, PageHeader } from "@/components/ui";
 import { SourceForm } from "./source-form";
 import { AdminScanButton } from "./scan-button";
+import { DiscoverForm } from "./discover-form";
 
 export const metadata: Metadata = { title: "Admin" };
 
@@ -28,7 +29,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         <Badge tone={aiTailoringAvailable() ? "green" : "amber"}>{aiTailoringAvailable() ? "AI tailoring on" : "AI tailoring off (no ANTHROPIC_API_KEY)"}</Badge>
         <Badge tone={isMailConfigured() ? "green" : "amber"}>{isMailConfigured() ? "Email on" : "Email off (no SMTP settings)"}</Badge>
         <Badge tone={sourceReady("ADZUNA") ? "green" : "neutral"}>Adzuna {sourceReady("ADZUNA") ? "keys set" : "keys not set"}</Badge>
-        <Badge tone={sourceReady("REED") ? "green" : "neutral"}>Reed {sourceReady("REED") ? "key set" : "key not set"}</Badge>
+        <Badge tone={sourceReady("REED") ? "green" : "neutral"}>Reed API {sourceReady("REED") ? "key set" : "key not set"}</Badge>
+        <Badge tone={sourceReady("JSEARCH") ? "green" : "neutral"}>Google for Jobs {sourceReady("JSEARCH") ? "key set" : "key not set"}</Badge>
+        <Badge tone={process.env.BRAVE_SEARCH_API_KEY ? "green" : "neutral"}>Web discovery {aiTailoringAvailable() || process.env.BRAVE_SEARCH_API_KEY ? "on" : "off"}</Badge>
         <Badge tone={process.env.CRON_SECRET ? "green" : "amber"}>{process.env.CRON_SECRET ? "Scheduled scan armed" : "CRON_SECRET not set"}</Badge>
       </div>
 
@@ -41,7 +44,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             ) : (
               <ul className="divide-y divide-cloud">
                 {sources.map((s) => {
-                  const cfg = (s.config ?? {}) as { token?: string; query?: string; where?: string };
+                  const cfg = (s.config ?? {}) as { token?: string; query?: string; where?: string; url?: string };
                   return (
                     <li key={s.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
                       <div className="min-w-0">
@@ -49,7 +52,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                           {s.name} {!s.enabled && <Badge>paused</Badge>}
                         </p>
                         <p className="text-sm text-graphite">
-                          {SOURCE_KIND_LABELS[s.kind as SourceKind]} · {cfg.token ?? `“${cfg.query}”${cfg.where ? ` in ${cfg.where}` : ""}`} · {s._count.jobs} adverts
+                          {SOURCE_KIND_LABELS[s.kind as SourceKind]} · {cfg.token ?? cfg.url ?? `“${cfg.query}”${cfg.where ? ` in ${cfg.where}` : ""}`} · {s._count.jobs} adverts
                         </p>
                         <p className="text-xs text-steel">
                           {s.lastScanAt ? `Last read ${formatDateTime(s.lastScanAt)}` : "Not read yet"}
@@ -89,6 +92,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 <thead className="text-left text-xs text-graphite">
                   <tr>
                     <th className="py-1 pr-3">Started</th>
+                    <th className="py-1 pr-3">Status</th>
                     <th className="py-1 pr-3">Trigger</th>
                     <th className="py-1 pr-3">Read</th>
                     <th className="py-1 pr-3">New</th>
@@ -101,6 +105,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                   {runs.map((r) => (
                     <tr key={r.id} className="border-t border-cloud align-top">
                       <td className="py-1.5 pr-3 whitespace-nowrap">{formatDateTime(r.startedAt)}</td>
+                      <td className="py-1.5 pr-3">{r.status === "RUNNING" ? `running (${r.phase.toLowerCase()})` : r.status.toLowerCase()}</td>
                       <td className="py-1.5 pr-3">{r.trigger.toLowerCase()}</td>
                       <td className="py-1.5 pr-3">{r.jobsFound}</td>
                       <td className="py-1.5 pr-3">{r.jobsNew}</td>
@@ -115,10 +120,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </Card>
         </div>
 
+        <div className="space-y-6">
+        <Card>
+          <CardTitle>Find sources for a field</CardTitle>
+          <DiscoverForm />
+        </Card>
         <Card>
           <CardTitle>{editing ? "Edit source" : "Add a source"}</CardTitle>
           <SourceForm key={editing?.id ?? "new"} source={editing ? { id: editing.id, kind: editing.kind, name: editing.name, enabled: editing.enabled, config: (editing.config ?? {}) as Record<string, string | number | undefined> } : null} />
         </Card>
+        </div>
       </div>
     </>
   );

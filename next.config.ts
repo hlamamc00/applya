@@ -5,6 +5,10 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // No generated AGENTS.md / CLAUDE.md; the README documents the project.
   agentRules: false,
+  experimental: {
+    // CV uploads go through a Server Action; a CV is well under this.
+    serverActions: { bodySizeLimit: "8mb" },
+  },
   async headers() {
     return [
       {

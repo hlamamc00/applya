@@ -25,6 +25,8 @@ Email and password accounts (bcrypt hashes, a signed HttpOnly session cookie tha
 
 ### Profile & CV (`/app/profile`)
 
+Upload an existing CV (PDF, Word or text) and it is read into the fields below: with `ANTHROPIC_API_KEY` Claude does the reading, otherwise a section parser (`src/lib/cv-import.ts`). Nothing is saved until the person has checked the fields and pressed Save; the extracted text is kept on the profile.
+
 The structured content a CV is built from: contact details and links, a headline and summary, professional exams (passed / result awaited / planned), grouped skills, experience with bullets, education and any extra sections a field needs. Separate fields hold availability, notice period, salary expectations, right-to-work wording and visa expiry; these go into draft messages but are never sent to the AI provider. The sections are JSON on `Profile` (`src/lib/cv.ts`), so a user in another field adds whatever their CV needs without a schema change.
 
 ### Job preferences (`/app/preferences`)
@@ -38,12 +40,20 @@ Sources live in the database (`JobSource`) and are managed under **Admin → Sou
 | Kind | Needs | Config |
 | --- | --- | --- |
 | Greenhouse, Lever, Ashby, Workable board | nothing | the employer's board token / slug |
+| Job feed (RSS) | nothing | the feed URL; `{page}` in it reads several pages (Madgex boards such as theactuaryjobs.com expose `/jobsrss/?keywords=…`) |
+| Reed search (no key) | nothing | search terms, optional place: reed.co.uk's public feed |
 | Adzuna search | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` (free at developer.adzuna.com) | search terms, optional place, days back |
-| Reed search | `REED_API_KEY` (free at reed.co.uk/developers) | search terms, optional place, days back |
+| Reed API search | `REED_API_KEY` (free at reed.co.uk/developers) | search terms, optional place, days back |
+| Google for Jobs (JSearch) | `RAPIDAPI_KEY` (rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) | search terms, place: LinkedIn, Indeed, Glassdoor, employer sites and more |
+| Jooble, Careerjet | `JOOBLE_API_KEY`, `CAREERJET_API_KEY` (free) | search terms, place |
 
-`src/lib/jobs/scan.ts` reads every enabled source, stores adverts (`Job`, deduplicated per source), marks ones that disappeared as closed, then scores every open advert for each user against their preferences (`src/lib/jobs/matching.ts`: title keywords, location, level signals, areas, study support). Matches at or above the user's threshold appear under **Matches**; from 70 up a draft application is prepared automatically. The scan runs daily from `netlify/functions/scan.mts` (06:30 UTC), which calls `POST /api/scan` with `CRON_SECRET`; a user's **Scan now** re-scores everything for them so changed preferences take effect at once.
+Feeds only carry a summary, so the scanner reads each new advert's own page (its schema.org `JobPosting` where there is one) for the full description, employer, location and salary. The same advert on several boards is kept once.
 
-The seed adds Adzuna and Reed searches for "actuarial" / "actuary" / "trainee actuary" (they need the keys) and one public Greenhouse board so a first scan has something to read. Add employers' own boards as you find them: the token is in the careers page URL (`job-boards.greenhouse.io/<token>`, `jobs.lever.co/<slug>`, `jobs.ashbyhq.com/<name>`, `apply.workable.com/<subdomain>`).
+**Finding sources beyond the list.** Under **Job preferences → Find more sources for me** (and **Admin → Find sources for a field**) `src/lib/jobs/discover.ts` adds a reed.co.uk search per keyword straight away and, when `ANTHROPIC_API_KEY` (Claude with web search) or `BRAVE_SEARCH_API_KEY` is set, searches the web for employers in the field whose careers sites run on Greenhouse / Lever / Ashby / Workable and for specialist job boards with feeds. Every candidate is tried first; only ones that return adverts are saved.
+
+**How a scan runs.** `src/lib/jobs/scan.ts` works in steps so it fits serverless time limits: read sources → read advert pages → score every open advert for each user (`src/lib/jobs/matching.ts`: title keywords, location, level signals, areas, study support) → prepare drafts for the strongest matches (up to 12 per person per scan, from a score of 70). `POST /api/scan` does ~20 seconds of work and records progress on `ScanRun`; on Netlify `netlify/functions/scan-background.mts` calls it until done (up to 15 minutes), started by the daily `scan.mts` (06:30 UTC) or by **Scan now**. From a terminal `npm run scan` runs a whole scan.
+
+The seed adds The Actuary Jobs (the IFoA's board) and reed.co.uk searches for "actuarial" / "actuary", which need no keys, plus Adzuna and Reed API searches that do, and one public Greenhouse board.
 
 ### Tailoring
 
@@ -55,7 +65,11 @@ An application holds the job, its CV versions, the cover message, private notes 
 
 - **Approve** records the exact CV version on screen (`approvedCvId`); the button carries the version id, so a version saved in another tab can't be approved unseen.
 - Editing the CV or the message after approval moves the application back to review.
-- **Approved** and **Submitted** are separate: approving never sends anything. Apply on the employer's site with the downloaded PDF and the message, then **Mark as submitted**. Automatic submission is not implemented; the status model and the approval trail are ready for it.
+- **Approved** and **Submitted** are separate: approving never sends anything. Then either **Send application by email** from the person's own mailbox (below), with the approved CV attached and the message as the body, or apply on the employer's site with the downloaded PDF and **Mark as submitted**.
+
+### Sending from the person's own email (`/app/settings`)
+
+Under **Account → Your mailbox** a person connects their own mailbox over SMTP: Gmail, Outlook, Yahoo and iCloud presets (each takes an app password), or any provider's SMTP details. The login is checked before it is saved and the password is stored encrypted (AES-256-GCM, key derived from `AUTH_SECRET`; `src/lib/crypto.ts`). Approved applications are then sent from that address (`src/lib/user-mail.ts`), so they appear in the person's Sent folder and replies come straight back to them. The application records the recipient and the provider's message id.
 - The PDF (`/app/applications/<id>/cv.pdf`, `src/lib/cv-pdf.ts`) is always named `Firstname_Lastname_CV.pdf`, whatever the job. Layout: name and contact line, headline, profile, professional qualifications (passed first), skills, experience (reverse chronological), education, extra sections.
 
 ## Configuration
@@ -72,7 +86,8 @@ All settings are environment variables; `.env.example` lists them.
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_FIRST_NAME`, `SEED_ADMIN_LAST_NAME` | The first admin account, created by the seed if it doesn't exist |
 | `ANTHROPIC_API_KEY`, `TAILOR_MODEL` | AI tailoring (optional; keyword tailoring without it) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Password-reset and review emails (optional; nothing is sent without them) |
-| `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `REED_API_KEY` | The aggregator sources (optional) |
+| `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `REED_API_KEY`, `RAPIDAPI_KEY`, `JOOBLE_API_KEY`, `CAREERJET_API_KEY` | The keyed aggregator sources (optional) |
+| `BRAVE_SEARCH_API_KEY` | Web discovery of sources without an Anthropic key (optional) |
 
 ## Deploying to Netlify with Neon
 
@@ -80,7 +95,7 @@ All settings are environment variables; `.env.example` lists them.
 2. **Netlify:** create a site from this repository. `netlify.toml` sets the build (`npm run build:netlify`, webpack) and the Next.js runtime plugin. Add the environment variables above under Site configuration → Environment variables. Set `SITE_URL=https://applya.co.uk`.
 3. Production builds run `prisma db push` against the direct connection first, so a merged schema change reaches the database before the pages are built; a change that would lose data stops the build and has to be applied by hand. Deploy previews don't push.
 4. Seed once from your machine with the production `.env`: `npm run db:seed`. (It only adds what's missing.)
-5. The scheduled scan (`netlify/functions/scan.mts`) is deployed with the site; Netlify shows it under Functions → Scheduled. It needs `SITE_URL` and `CRON_SECRET`.
+5. The scheduled scan (`netlify/functions/scan.mts`) and the background worker it starts (`scan-background.mts`) are deployed with the site; Netlify shows them under Functions. They need `SITE_URL` and `CRON_SECRET`.
 
 ### Connecting applya.co.uk
 
@@ -111,7 +126,9 @@ src/app/                    pages: sign-in, register, reset; /app (overview, mat
 src/lib/auth.ts             sessions and passwords
 src/lib/cv.ts               CV document shape; cv-pdf.ts renders it
 src/lib/tailor.ts           AI and keyword tailoring
-src/lib/jobs/               source connectors, scoring, the scan
+src/lib/cv-import.ts        reading an uploaded CV into the profile
+src/lib/user-mail.ts        sending from the person's own mailbox
+src/lib/jobs/               source connectors, scoring, discovery, the stepped scan
 src/lib/applications.ts     drafts, versions, approvals
 src/lib/actions/            Server Actions behind every form
 ```

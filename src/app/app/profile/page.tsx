@@ -4,7 +4,9 @@ import { db } from "@/lib/db";
 import { cvFromProfile } from "@/lib/cv";
 import type { ProfileInput } from "@/lib/actions/profile";
 import { Notice, PageHeader } from "@/components/ui";
+import type { ParsedProfile } from "@/lib/cv-import";
 import { ProfileForm } from "./profile-form";
+import { CvUploadForm } from "./cv-upload-form";
 
 export const metadata: Metadata = { title: "Profile & CV" };
 
@@ -14,6 +16,8 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
   const profile =
     (await db.profile.findUnique({ where: { userId: user.id } })) ?? (await db.profile.create({ data: { userId: user.id } }));
   const cv = cvFromProfile(user, profile);
+  // A CV that was just read fills the form instead of the saved profile; Save keeps it.
+  const pending = (profile.pendingImport ?? null) as ParsedProfile | null;
 
   const initial: ProfileInput = {
     firstName: user.firstName,
@@ -36,6 +40,22 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
     rightToWork: profile.rightToWork,
     visaExpiresAt: profile.visaExpiresAt ? profile.visaExpiresAt.toISOString().slice(0, 10) : "",
     aiTailoring: profile.aiTailoring,
+    ...(pending
+      ? {
+          firstName: pending.firstName || user.firstName,
+          lastName: pending.lastName || user.lastName,
+          headline: pending.headline || cv.headline,
+          summary: pending.summary || cv.summary,
+          phone: pending.phone || cv.phone,
+          location: pending.location || cv.location,
+          links: pending.links.length ? pending.links : cv.links,
+          qualifications: pending.qualifications.length ? pending.qualifications : cv.qualifications,
+          skills: pending.skills.length ? pending.skills : cv.skills,
+          experience: pending.experience.length ? pending.experience : cv.experience,
+          education: pending.education.length ? pending.education : cv.education,
+          extraSections: pending.extraSections.length ? pending.extraSections : cv.extraSections,
+        }
+      : {}),
   };
 
   return (
@@ -50,7 +70,8 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
           <Notice tone="green">Welcome to Applya. Fill in your profile first, then set your job preferences, and the scanner will start finding matches.</Notice>
         </div>
       )}
-      <ProfileForm initial={initial} />
+      <CvUploadForm fileName={profile.cvFileName} uploadedAt={profile.cvUploadedAt?.toISOString() ?? null} pending={pending ? { method: pending.method } : null} />
+      <ProfileForm key={profile.cvUploadedAt?.toISOString() ?? "saved"} initial={initial} />
     </>
   );
 }

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Empty, PageHeader } from "@/components/ui";
 import { ScoreBadge } from "@/components/status-badge";
 import { ScanButton } from "./scan-button";
+import { scanInProgress } from "@/lib/jobs/scan";
 import { MatchActions } from "./match-actions";
 
 export const metadata: Metadata = { title: "Matches" };
@@ -21,6 +22,7 @@ const tabs = [
 export default async function JobsPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const user = await requireUser("/app/jobs");
   const { status = "NEW" } = await searchParams;
+  const running = await scanInProgress();
   const matches = await db.match.findMany({
     where: { userId: user.id, status, job: status === "NEW" ? { closedAt: null } : undefined },
     orderBy: [{ score: "desc" }, { createdAt: "desc" }],
@@ -33,7 +35,7 @@ export default async function JobsPage({ searchParams }: { searchParams: Promise
 
   return (
     <>
-      <PageHeader eyebrow="Matches" title="Jobs that fit your preferences" intro="Scored against your keywords, locations, level and areas. Shortlist the ones you like, dismiss the rest, and prepare a tailored draft when you're ready." action={<ScanButton />} />
+      <PageHeader eyebrow="Matches" title="Jobs that fit your preferences" intro="Scored against your keywords, locations, level and areas. Shortlist the ones you like, dismiss the rest, and prepare a tailored draft when you're ready." action={<ScanButton running={running ? { phase: running.phase, startedAt: formatDate(running.startedAt, "HH:mm") } : null} />} />
       <nav className="mb-5 flex gap-1 overflow-x-auto border-b border-mist">
         {tabs.map((t) => (
           <Link key={t.key} href={`/app/jobs?status=${t.key}`} className={cn("-mb-px border-b-2 px-3 py-2 text-sm font-medium", status === t.key ? "border-green text-ink" : "border-transparent text-graphite hover:text-ink")}>

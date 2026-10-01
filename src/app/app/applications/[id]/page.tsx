@@ -14,6 +14,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { CvPreview } from "./cv-preview";
 import { CvEditor } from "./cv-editor";
 import { MessageForm } from "./message-form";
+import { SendForm } from "./send-form";
 
 export const metadata: Metadata = { title: "Application" };
 
@@ -30,6 +31,9 @@ export default async function ApplicationPage({ params, searchParams }: { params
   const cv = version ? parseCv(version.content) : null;
   const fileName = `${fileSafeName(user.firstName, user.lastName)}_CV.pdf`;
   const approvedIsLatest = app.approvedCvId && version && app.approvedCvId === version.id;
+  const mailbox = await db.mailAccount.findUnique({ where: { userId: user.id }, select: { fromEmail: true } });
+  // An address in the advert is the likely place to apply.
+  const advertEmail = app.applyEmail ?? /[\w.+-]+@[\w-]+\.[\w.-]+/.exec(app.job.description)?.[0] ?? "";
 
   return (
     <>
@@ -112,18 +116,17 @@ export default async function ApplicationPage({ params, searchParams }: { params
                 <Notice tone="blue">
                   Approved {formatDate(app.approvedAt)} · version “{app.approvedCv?.label}”{approvedIsLatest ? "" : " (an older version)"}
                 </Notice>
-                <p className="my-3 text-sm text-graphite">
-                  Apply on the employer&apos;s site with the downloaded CV and message, then mark it submitted here. (Automatic submission is on the roadmap; approving never sends anything.)
-                </p>
-                <a href={app.job.url} target="_blank" rel="noopener noreferrer" className="mb-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white hover:bg-navy-soft">
+                <SendForm applicationId={app.id} defaultTo={advertEmail} defaultSubject={`Application: ${app.job.title} – ${user.firstName} ${user.lastName}`} mailbox={mailbox?.fromEmail ?? null} />
+                <p className="my-3 text-sm text-graphite">Or apply on the employer&apos;s site with the downloaded CV and message, then mark it submitted here.</p>
+                <a href={app.job.url} target="_blank" rel="noopener noreferrer" className="mb-2 inline-flex w-full items-center justify-center gap-2 rounded-md border border-mist bg-white px-4 py-2 text-sm font-semibold hover:bg-cloud">
                   Open application page <ExternalLink size={14} />
                 </a>
                 <form action={setStatus} className="mb-2">
                   <input type="hidden" name="id" value={app.id} />
                   <input type="hidden" name="status" value="SUBMITTED" />
                   <input type="hidden" name="via" value="LINK" />
-                  <SubmitButton variant="green" className="w-full">
-                    Mark as submitted
+                  <SubmitButton variant="secondary" className="w-full">
+                    Mark as submitted on their site
                   </SubmitButton>
                 </form>
                 <form action={setStatus}>
@@ -137,7 +140,7 @@ export default async function ApplicationPage({ params, searchParams }: { params
             ) : (
               <>
                 <p className="text-sm text-graphite">
-                  {app.status === "SUBMITTED" && `Submitted ${formatDate(app.submittedAt)}.`}
+                  {app.status === "SUBMITTED" && `Submitted ${formatDate(app.submittedAt)}${app.submittedVia === "EMAIL" && app.sentTo ? ` by email to ${app.sentTo}` : ""}.`}
                   {app.status === "INTERVIEW" && "Interview stage."}
                   {app.status === "OFFER" && "Offer received."}
                   {app.status === "REJECTED" && "Rejected."}
