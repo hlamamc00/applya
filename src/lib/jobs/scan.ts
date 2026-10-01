@@ -4,6 +4,7 @@ import type { SourceKind } from "@/lib/types";
 import { connectors, enrichJob, needsEnrichment, sourceReady, type FoundJob, type SourceConfig } from "./sources";
 import { DRAFT_THRESHOLD, scoreJob, type MatchPreferences } from "./matching";
 import { prepareDraft } from "@/lib/applications";
+import { applyEmailFor, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
 import { sendMail, simpleEmail, siteUrl } from "@/lib/mail";
 
 // One scan: read every enabled source, store the adverts, read the advert
@@ -162,7 +163,7 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
         // Written per advert, so a cut-off step loses at most one page's work.
         await db.job.update({
           where: { id: job.id },
-          data: { title: full.title.slice(0, 300), company: full.company.slice(0, 200), location: full.location.slice(0, 300), remote: full.remote, description: full.description.slice(0, 60_000), salary: full.salary.slice(0, 200), postedAt: full.postedAt, enrichedAt: new Date() },
+          data: { title: full.title.slice(0, 300), company: full.company.slice(0, 200), location: full.location.slice(0, 300), remote: full.remote, description: full.description.slice(0, 60_000), salary: full.salary.slice(0, 200), postedAt: full.postedAt, enrichedAt: new Date(), applyEmail: full.applyEmail ?? null, applyUrl: full.applyUrl ?? null, applyKind: full.applyKind ?? null },
         });
       }
       await save();
@@ -239,9 +240,16 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       if (timeLeft() < 10_000) break;
       progress.pendingDrafts.shift();
       try {
-        const prefs = await db.preference.findUnique({ where: { userId: next.userId }, select: { autoApprove: true } });
-        await prepareDraft(next.userId, next.jobId, { autoApprove: prefs?.autoApprove });
+        const prefs = await db.preference.findUnique({ where: { userId: next.userId }, select: { autoApprove: true, autoSubmit: true } });
+        const app = await prepareDraft(next.userId, next.jobId, { autoApprove: prefs?.autoApprove });
         draftsNew += 1;
+        if (prefs?.autoApprove && prefs.autoSubmit) {
+          const job = await db.job.findUniqueOrThrow({ where: { id: next.jobId } });
+          const mailbox = await db.mailAccount.findUnique({ where: { userId: next.userId }, select: { id: true } });
+          const to = applyEmailFor(job, { applyEmail: null });
+          if (to && mailbox) await submitByEmail(app.id, to);
+          else if (canApplyOnSite(job)) await startSiteApply(app.id, "LIVE");
+        }
         (progress.readyDrafts[next.userId] ??= []).push({ title: next.title, company: next.company });
       } catch (error) {
         errors.push(`Draft for ${next.title}: ${error instanceof Error ? error.message : String(error)}`);

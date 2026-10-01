@@ -129,6 +129,7 @@ model Preference {
   minScore         Int      @default(40)   // matches below this aren't shown
   dailyScan        Boolean  @default(true)
   autoApprove      Boolean  @default(false) // drafts skip the review step
+  autoSubmit       Boolean  @default(false) // approved drafts are sent / applied for at once
   reviewEmails     Boolean  @default(true)
   updatedAt        DateTime @updatedAt
 }
@@ -176,6 +177,10 @@ model Job {
   closedAt      DateTime?
   // Set once the advert's own page has been read (feeds only carry a summary).
   enrichedAt    DateTime?
+  // How the advert says to apply, read from its page: applyEmail above, or
+  // the page that holds the form. applyKind: EMAIL | FORM | UNKNOWN.
+  applyUrl      String?
+  applyKind     String?
   matches       Match[]
   applications  Application[]
 
@@ -242,9 +247,30 @@ model Application {
   updatedAt      DateTime    @updatedAt
   cvVersions     CvVersion[]
   events         ApplicationEvent[]
+  attempts       ApplicationAttempt[]
 
   @@unique([userId, jobId])
   @@index([userId, status])
+}
+
+/// One go at sending an application: by email, or by filling in the form on
+/// the employer's site in a browser. mode PREVIEW fills the form and stops
+/// before submitting, for the person to see what would be sent.
+model ApplicationAttempt {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  kind          String // EMAIL | FORM
+  mode          String      @default("LIVE") // LIVE | PREVIEW
+  status        String      @default("QUEUED") // QUEUED | RUNNING | SUBMITTED | PREVIEWED | NEEDS_YOU | FAILED
+  detail        String      @default("")
+  finalUrl      String?
+  log           Json        @default("[]")
+  screenshot    Bytes?
+  startedAt     DateTime    @default(now())
+  finishedAt    DateTime?
+
+  @@index([applicationId, startedAt])
 }
 
 /// The history shown on an application: created, tailored, approved, sent...

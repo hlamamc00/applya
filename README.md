@@ -77,7 +77,14 @@ An application holds the job, its CV versions, the cover message, private notes 
 
 - **Approve** records the exact CV version on screen (`approvedCvId`); the button carries the version id, so a version saved in another tab can't be approved unseen.
 - Editing the CV or the message after approval moves the application back to review.
-- **Approved** and **Submitted** are separate: approving never sends anything. Then either **Send application by email** from the person's own mailbox (below), with the approved CV attached and the message as the body, or apply on the employer's site with the downloaded PDF and **Mark as submitted**.
+- Approving can submit straight away. When the advert names an application email (`Job.applyEmail`, found while reading the advert), **Approve & send to …** emails the message and the approved CV from the person's own mailbox. When it points at a form, **Approve & apply on their site** sends a browser to fill it in. **Approve only** just records the approval; the same actions are offered afterwards, with a **Preview the filled-in form first** that stops before pressing Submit and shows a screenshot.
+- Every submission gets a copy to the applicant: the message, the CV that went with it and (for forms) a screenshot of the final screen and what the browser did.
+- Statuses **Applying…** (a browser is working) and **Needs you** (it stopped: an account or CAPTCHA was required, the form asked for something the profile doesn't hold — reported as *Additional information required: …* — or validation failed). The screenshot and the page it reached are shown on the application, and the applicant is emailed.
+- With **Submit automatically** on under preferences (and auto-approve), the daily scan does all of this without a review.
+
+### Applying on employer sites (`src/lib/apply-runner.ts`)
+
+A headless Chromium (`puppeteer-core` + `@sparticuz/chromium`, in the `apply-background` Netlify function) opens the advert, follows Apply links (preferring "No thanks, continue to apply" / "apply as guest" routes on job boards such as The Actuary Jobs, waiting out timed redirects and "please wait" curtains), and stops at sign-in walls and CAPTCHAs. On the form it reads every control with its label, options and surrounding text, then plans answers: rules for the usual fields (name, email, phone, LinkedIn, location, cover letter, salary, notice, availability, right to work, consent) and the AI for the rest, told never to guess. The CV PDF is attached to any file input. Required questions nothing could answer stop the run *before* submit. Multi-step forms are followed page by page; a success message after submit marks the application Submitted, validation messages mark it Needs you. The browser talks to the app through `/api/apply/<id>/packet|plan|result` (bearer `CRON_SECRET`). In development set `APPLY_CHROMIUM_PATH` to a local Chromium and the same runner is driven in-process.
 
 ### Sending from the person's own email (`/app/settings`)
 
@@ -99,7 +106,8 @@ All settings are environment variables; `.env.example` lists them.
 | `DATABASE_URL_UNPOOLED` | Neon's direct URL, used for schema pushes on deploy (optional; derived from `DATABASE_URL` otherwise) |
 | `AUTH_SECRET` | Signs the login cookie (32+ random characters) |
 | `SITE_URL` | Absolute site URL, for links in emails and the scheduled scan |
-| `CRON_SECRET` | Protects `/api/scan` |
+| `CRON_SECRET` | Protects `/api/scan` and `/api/apply/*` (the Netlify functions call them with it) |
+| `APPLY_CHROMIUM_PATH` | Development only: a Chromium binary for applying on sites locally (Netlify ships its own) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_FIRST_NAME`, `SEED_ADMIN_LAST_NAME` | The first admin account, created by the seed if it doesn't exist |
 | `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_AI_TOKEN`, `ANTHROPIC_API_KEY`, `AI_PROVIDER`, `*_MODEL` | AI tailoring and CV reading (optional; all keys set are queued as backups for each other) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Password-reset and review emails (optional; nothing is sent without them) |

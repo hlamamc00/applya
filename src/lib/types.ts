@@ -8,13 +8,15 @@ export const BRAND = {
   domain: "applya.co.uk",
 } as const;
 
-export const APPLICATION_STATUSES = ["DRAFT", "IN_REVIEW", "APPROVED", "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED", "WITHDRAWN"] as const;
+export const APPLICATION_STATUSES = ["DRAFT", "IN_REVIEW", "APPROVED", "SUBMITTING", "NEEDS_YOU", "SUBMITTED", "INTERVIEW", "OFFER", "REJECTED", "WITHDRAWN"] as const;
 export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
 
 export const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
   DRAFT: "Draft",
   IN_REVIEW: "Ready to review",
   APPROVED: "Approved",
+  SUBMITTING: "Applying…",
+  NEEDS_YOU: "Needs you",
   SUBMITTED: "Submitted",
   INTERVIEW: "Interview",
   OFFER: "Offer",

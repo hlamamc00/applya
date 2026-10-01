@@ -21,6 +21,7 @@ export async function savePreferences(_: FormState, formData: FormData): Promise
     minScore,
     dailyScan: formData.get("dailyScan") === "on",
     autoApprove: formData.get("autoApprove") === "on",
+    autoSubmit: formData.get("autoSubmit") === "on",
     reviewEmails: formData.get("reviewEmails") === "on",
   };
   await db.preference.upsert({ where: { userId: user.id }, create: { userId: user.id, ...data }, update: data });

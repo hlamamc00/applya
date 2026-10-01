@@ -6,7 +6,8 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { parseCv } from "@/lib/cv";
 import { latestCv } from "@/lib/applications";
-import { approve, deleteApplication, retailor, setStatus } from "@/lib/actions/applications";
+import { deleteApplication, retailor, setStatus } from "@/lib/actions/applications";
+import { applyEmailFor, canApplyOnSite } from "@/lib/apply";
 import { fileSafeName, formatDate, formatDateTime } from "@/lib/utils";
 import { Button, Card, CardTitle, Notice, PageHeader } from "@/components/ui";
 import { SubmitButton } from "@/components/submit-button";
@@ -14,7 +15,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { CvPreview } from "./cv-preview";
 import { CvEditor } from "./cv-editor";
 import { MessageForm } from "./message-form";
-import { SendForm } from "./send-form";
+import { Decision } from "./decision";
 
 export const metadata: Metadata = { title: "Application" };
 
@@ -32,8 +33,8 @@ export default async function ApplicationPage({ params, searchParams }: { params
   const fileName = `${fileSafeName(user.firstName, user.lastName)}_CV.pdf`;
   const approvedIsLatest = app.approvedCvId && version && app.approvedCvId === version.id;
   const mailbox = await db.mailAccount.findUnique({ where: { userId: user.id }, select: { fromEmail: true } });
-  // An address in the advert is the likely place to apply.
-  const advertEmail = app.applyEmail ?? /[\w.+-]+@[\w-]+\.[\w.-]+/.exec(app.job.description)?.[0] ?? "";
+  const advertEmail = applyEmailFor(app.job, app);
+  const latestAttempt = await db.applicationAttempt.findFirst({ where: { applicationId: app.id, kind: "FORM" }, orderBy: { startedAt: "desc" }, select: { id: true, status: true, detail: true, finalUrl: true, mode: true, finishedAt: true, screenshot: true } });
 
   return (
     <>
@@ -100,67 +101,35 @@ export default async function ApplicationPage({ params, searchParams }: { params
         <div className="space-y-4">
           <Card>
             <CardTitle>Decision</CardTitle>
-            {app.status === "IN_REVIEW" || app.status === "DRAFT" ? (
-              <>
-                <p className="mb-3 text-sm text-graphite">Read the CV and message above. Approving records this exact CV version; nothing is sent until you mark it submitted.</p>
-                <form action={approve}>
-                  <input type="hidden" name="id" value={app.id} />
-                  <input type="hidden" name="cvVersionId" value={version?.id ?? ""} />
-                  <SubmitButton variant="green" className="w-full" disabled={!version}>
-                    Approve this version
-                  </SubmitButton>
-                </form>
-              </>
-            ) : app.status === "APPROVED" ? (
-              <>
-                <Notice tone="blue">
-                  Approved {formatDate(app.approvedAt)} · version “{app.approvedCv?.label}”{approvedIsLatest ? "" : " (an older version)"}
-                </Notice>
-                <SendForm applicationId={app.id} defaultTo={advertEmail} defaultSubject={`Application: ${app.job.title} – ${user.firstName} ${user.lastName}`} mailbox={mailbox?.fromEmail ?? null} />
-                <p className="my-3 text-sm text-graphite">Or apply on the employer&apos;s site with the downloaded CV and message, then mark it submitted here.</p>
-                <a href={app.job.url} target="_blank" rel="noopener noreferrer" className="mb-2 inline-flex w-full items-center justify-center gap-2 rounded-md border border-mist bg-white px-4 py-2 text-sm font-semibold hover:bg-cloud">
-                  Open application page <ExternalLink size={14} />
-                </a>
-                <form action={setStatus} className="mb-2">
-                  <input type="hidden" name="id" value={app.id} />
-                  <input type="hidden" name="status" value="SUBMITTED" />
-                  <input type="hidden" name="via" value="LINK" />
-                  <SubmitButton variant="secondary" className="w-full">
-                    Mark as submitted on their site
-                  </SubmitButton>
-                </form>
-                <form action={setStatus}>
-                  <input type="hidden" name="id" value={app.id} />
-                  <input type="hidden" name="status" value="IN_REVIEW" />
-                  <SubmitButton variant="ghost" className="w-full">
-                    Remove approval
-                  </SubmitButton>
-                </form>
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-graphite">
-                  {app.status === "SUBMITTED" && `Submitted ${formatDate(app.submittedAt)}${app.submittedVia === "EMAIL" && app.sentTo ? ` by email to ${app.sentTo}` : ""}.`}
-                  {app.status === "INTERVIEW" && "Interview stage."}
-                  {app.status === "OFFER" && "Offer received."}
-                  {app.status === "REJECTED" && "Rejected."}
-                  {app.status === "WITHDRAWN" && "Withdrawn."}
-                </p>
-                <div className="mt-3 grid gap-2">
-                  {(["INTERVIEW", "OFFER", "REJECTED"] as const)
-                    .filter((s) => s !== app.status && app.status !== "WITHDRAWN")
-                    .map((s) => (
-                      <form key={s} action={setStatus}>
-                        <input type="hidden" name="id" value={app.id} />
-                        <input type="hidden" name="status" value={s} />
-                        <SubmitButton variant="secondary" className="w-full">
-                          {s === "INTERVIEW" ? "Interview arranged" : s === "OFFER" ? "Offer received" : "Rejected"}
-                        </SubmitButton>
-                      </form>
-                    ))}
-                </div>
-              </>
-            )}
+            <Decision
+              applicationId={app.id}
+              status={app.status}
+              cvVersionId={version?.id ?? null}
+              jobUrl={app.job.applyUrl || app.job.url}
+              applyEmail={advertEmail}
+              canApplyOnSite={canApplyOnSite(app.job)}
+              mailbox={mailbox?.fromEmail ?? null}
+              subject={`Application: ${app.job.title} – ${user.firstName} ${user.lastName}`}
+              approvedLine={app.approvedAt ? `Approved ${formatDate(app.approvedAt)} · version “${app.approvedCv?.label}”${approvedIsLatest ? "" : " (an older version)"}` : null}
+              submittedLine={
+                app.status === "SUBMITTED"
+                  ? `Submitted ${formatDate(app.submittedAt)}${app.submittedVia === "EMAIL" && app.sentTo ? ` by email to ${app.sentTo}` : app.submittedVia === "FORM" ? " on the employer's site" : ""}.`
+                  : app.status === "INTERVIEW"
+                    ? "Interview stage."
+                    : app.status === "OFFER"
+                      ? "Offer received."
+                      : app.status === "REJECTED"
+                        ? "Rejected."
+                        : app.status === "WITHDRAWN"
+                          ? "Withdrawn."
+                          : null
+              }
+              latest={
+                latestAttempt
+                  ? { status: latestAttempt.status, detail: latestAttempt.detail, finalUrl: latestAttempt.finalUrl, mode: latestAttempt.mode, finishedAt: latestAttempt.finishedAt?.toISOString() ?? null, screenshotUrl: latestAttempt.screenshot ? `/app/applications/${app.id}/attempts/${latestAttempt.id}/screenshot.jpg` : null }
+                  : null
+              }
+            />
           </Card>
 
           <Card>

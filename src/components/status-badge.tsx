@@ -5,6 +5,8 @@ const tone: Record<ApplicationStatus, "neutral" | "green" | "amber" | "red" | "b
   DRAFT: "neutral",
   IN_REVIEW: "amber",
   APPROVED: "blue",
+  SUBMITTING: "blue",
+  NEEDS_YOU: "amber",
   SUBMITTED: "green",
   INTERVIEW: "green",
   OFFER: "navy",

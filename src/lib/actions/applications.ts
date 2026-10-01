@@ -9,10 +9,9 @@ import { parseCv } from "@/lib/cv";
 import { latestCv, prepareDraft, saveCvVersion } from "@/lib/applications";
 import { startScan } from "@/lib/jobs/scan";
 import { isApplicationStatus } from "@/lib/types";
-import { fileSafeName, str } from "@/lib/utils";
-import { renderCvPdf } from "@/lib/cv-pdf";
-import { sendFromUser } from "@/lib/user-mail";
+import { str } from "@/lib/utils";
 import { emailSchema } from "@/lib/validation";
+import { applyEmailFor, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
 import type { FormState } from "./auth";
 
 async function ownedApplication(id: string, userId: string) {
@@ -128,7 +127,28 @@ export async function approve(formData: FormData) {
     where: { id: app.id },
     data: { status: "APPROVED", approvedCvId: version.id, approvedAt: new Date(), events: { create: { kind: "APPROVED", detail: `Approved CV version "${version.label}"` } } },
   });
+  // "Approve & send" / "Approve & apply": the submission follows at once.
+  const then = str(formData.get("then"));
+  if (then === "email") {
+    const job = await db.job.findUniqueOrThrow({ where: { id: app.jobId } });
+    const to = emailSchema.safeParse(formData.get("to") || applyEmailFor(job, app));
+    if (to.success) await submitByEmail(app.id, to.data);
+  } else if (then === "site") {
+    await startSiteApply(app.id, "LIVE");
+  }
   revalidatePath("/app", "layout");
+}
+
+/** "Apply on their site now" for an approved application. */
+export async function applyOnSite(_: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser("/app/applications");
+  const app = await ownedApplication(str(formData.get("id")), user.id);
+  if (!["APPROVED", "NEEDS_YOU"].includes(app.status)) return { error: "Approve the application first." };
+  const job = await db.job.findUniqueOrThrow({ where: { id: app.jobId } });
+  if (!canApplyOnSite(job)) return { error: "This advert asks for applications by email, not on a site." };
+  const result = await startSiteApply(app.id, str(formData.get("mode")) === "PREVIEW" ? "PREVIEW" : "LIVE");
+  revalidatePath(`/app/applications/${app.id}`);
+  return result.ok ? { ok: result.message } : { error: result.message };
 }
 
 const transition = z.object({ id: z.string(), status: z.string(), via: z.string().optional() });
@@ -139,7 +159,7 @@ export async function setStatus(formData: FormData) {
   const app = await ownedApplication(parsed.id, user.id);
   if (!isApplicationStatus(parsed.status)) return;
   const status = parsed.status;
-  if (status === "SUBMITTED" && app.status !== "APPROVED" && app.status !== "SUBMITTED") throw new Error("Approve the application before marking it submitted");
+  if (status === "SUBMITTED" && !["APPROVED", "SUBMITTED", "NEEDS_YOU", "SUBMITTING"].includes(app.status)) throw new Error("Approve the application before marking it submitted");
   const detail: Record<string, string> = {
     SUBMITTED: `Marked as submitted${parsed.via ? ` (${parsed.via.toLowerCase()})` : ""}`,
     WITHDRAWN: "Withdrawn",
@@ -147,6 +167,8 @@ export async function setStatus(formData: FormData) {
     INTERVIEW: "Interview arranged",
     OFFER: "Offer received",
     IN_REVIEW: "Approval removed; back in review",
+    NEEDS_YOU: "Needs you",
+    SUBMITTING: "Applying",
     DRAFT: "Back to draft",
     APPROVED: "Approved",
   };
@@ -175,37 +197,12 @@ export async function deleteApplication(formData: FormData) {
 export async function sendByEmail(_: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser("/app/applications");
   const app = await ownedApplication(str(formData.get("id")), user.id);
-  if (app.status !== "APPROVED") return { error: "Approve the application first; only the approved version is sent." };
+  if (!["APPROVED", "NEEDS_YOU"].includes(app.status)) return { error: "Approve the application first; only the approved version is sent." };
   const to = emailSchema.safeParse(formData.get("to"));
   if (!to.success) return { error: "Enter the employer's email address." };
   const subject = str(formData.get("subject")).slice(0, 200);
   if (!subject) return { error: "Give the email a subject." };
-  const version = app.approvedCvId ? await db.cvVersion.findUnique({ where: { id: app.approvedCvId } }) : await latestCv(app.id);
-  if (!version) return { error: "No approved CV version to attach." };
-  const pdf = await renderCvPdf(parseCv(version.content));
-  let messageId: string;
-  try {
-    messageId = await sendFromUser(user.id, {
-      to: to.data,
-      subject,
-      text: app.coverMessage,
-      attachments: [{ filename: `${fileSafeName(user.firstName, user.lastName)}_CV.pdf`, content: Buffer.from(pdf), contentType: "application/pdf" }],
-    });
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-  await db.application.update({
-    where: { id: app.id },
-    data: {
-      status: "SUBMITTED",
-      submittedAt: new Date(),
-      submittedVia: "EMAIL",
-      applyEmail: to.data,
-      sentTo: to.data,
-      sentMessageId: messageId,
-      events: { create: { kind: "SUBMITTED", detail: `Sent by email to ${to.data} from your mailbox (CV version "${version.label}")` } },
-    },
-  });
+  const result = await submitByEmail(app.id, to.data, subject);
   revalidatePath("/app", "layout");
-  return { ok: `Sent to ${to.data}. A copy is in your mailbox's Sent folder.` };
+  return result.ok ? { ok: result.message } : { error: result.message };
 }

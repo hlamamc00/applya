@@ -16,6 +16,13 @@
 [context.production]
   command = "DATABASE_URL=\"${DATABASE_URL_UNPOOLED:-${DATABASE_URL/-pooler./.}}\" npx prisma db push --skip-generate && npm run build:netlify"
 
+# The form-filling function drives a headless Chromium (@sparticuz/chromium).
+# Its binary ships as brotli files that must travel with the function.
+[functions."apply-background"]
+  node_bundler = "esbuild"
+  external_node_modules = ["@sparticuz/chromium", "puppeteer-core"]
+  included_files = ["node_modules/@sparticuz/chromium/bin/**"]
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 

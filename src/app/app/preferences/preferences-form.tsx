@@ -16,6 +16,7 @@ interface Initial {
   minScore: number;
   dailyScan: boolean;
   autoApprove: boolean;
+  autoSubmit: boolean;
   reviewEmails: boolean;
 }
 
@@ -85,6 +86,16 @@ export function PreferencesForm({ initial, sources }: { initial: Initial; source
               <br />
               <span className="text-graphite">
                 New drafts for matches scoring 70 or more are approved as soon as they are prepared, so they are ready to send without a review. Leave this off until you have reviewed a few drafts and are happy with how they read.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" name="autoSubmit" className="mt-1" defaultChecked={initial.autoSubmit} />
+            <span>
+              <span className="font-semibold">Send automatically-approved drafts straight away</span>
+              <br />
+              <span className="text-graphite">
+                With the switch above on, each auto-approved draft is also sent: by email from your mailbox when the advert gives an address, otherwise by filling in the form on the employer&apos;s site. Anything a site won&apos;t let the browser finish comes back marked &ldquo;Needs you&rdquo;.
               </span>
             </span>
           </label>

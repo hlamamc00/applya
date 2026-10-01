@@ -26,6 +26,7 @@ export default async function PreferencesPage() {
           minScore: prefs.minScore,
           dailyScan: prefs.dailyScan,
           autoApprove: prefs.autoApprove,
+          autoSubmit: prefs.autoSubmit,
           reviewEmails: prefs.reviewEmails,
         }}
         sources={sources}

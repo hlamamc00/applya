@@ -18,6 +18,10 @@ import type { SourceKind } from "@/lib/types";
 
 export interface FoundJob {
   externalId: string;
+  /** How the advert says to apply, when its page says. */
+  applyEmail?: string;
+  applyUrl?: string;
+  applyKind?: "EMAIL" | "FORM" | "UNKNOWN";
   title: string;
   company: string;
   location: string;
@@ -575,6 +579,8 @@ interface JobLocation {
 
 interface JobPosting {
   title?: string;
+  directApply?: boolean;
+  url?: string;
   description?: string;
   datePosted?: string;
   hiringOrganization?: { name?: string } | string;
@@ -595,6 +601,35 @@ function findJobPosting(html: string): JobPosting | null {
     }
   }
   return null;
+}
+
+/**
+ * How the advert says to apply: an email address next to "apply"/"CV"/"send",
+ * a mailto: link, or the link/button that leads to the form.
+ */
+export function detectApply(html: string, text: string, pageUrl: string): { applyEmail?: string; applyUrl?: string; applyKind: "EMAIL" | "FORM" | "UNKNOWN" } {
+  const mailto = /href="mailto:([^"?]+)/i.exec(html)?.[1];
+  const nearApply =
+    /(?:apply|applications?|send (?:your|a) cv|cv|résumé|resume)[^.\n]{0,100}?(?:to|at|via|by emailing|email(?:ing)?)?[^.\n]{0,40}?([\w.+-]+@[\w-]+\.[\w.-]+)/i.exec(text)?.[1] ??
+    /([\w.+-]+@[\w-]+\.[\w.-]+)[^.\n]{0,60}?(?:with your cv|with a cv|to apply|your application)/i.exec(text)?.[1];
+  const email = (mailto ?? nearApply)?.toLowerCase();
+  const context = email ? (new RegExp(`.{0,80}${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").exec(text)?.[0] ?? "") : "";
+  const generic = email && (/^(no-?reply|privacy|info@|support@|press@|media@|dpo@|unsubscribe)/.test(email) || (/question|quer|enquir|contact|informal (chat|discussion)|further information|more information|find out more/i.test(context) && !/apply|application|cv/i.test(context)));
+  if (email && !generic && !/\.(png|jpg|gif|svg)$/i.test(email)) return { applyEmail: email, applyKind: "EMAIL" };
+  // A link whose text says apply, skipping "alert", "save", "sign in" style controls.
+  for (const m of html.matchAll(/<a[^>]+href="([^"#]+)"[^>]*>([\s\S]{0,160}?)<\/a>/gi)) {
+    const label = htmlToText(m[2]).toLowerCase();
+    if (!/\bapply\b/.test(label) || /alert|save|sign in|log in|register|share|email this/.test(label)) continue;
+    try {
+      const url = new URL(m[1].replace(/&amp;/g, "&"), pageUrl).href;
+      if (!/^https?:/.test(url)) continue;
+      return { applyUrl: url, applyKind: "FORM" };
+    } catch {
+      // not a URL
+    }
+  }
+  if (/<input[^>]+type="file"/i.test(html) || /<form[^>]+(apply|application)/i.test(html)) return { applyUrl: pageUrl, applyKind: "FORM" };
+  return { applyKind: "UNKNOWN" };
 }
 
 /** The readable text of a page, favouring its main content. */
@@ -626,8 +661,10 @@ export async function enrichJob(job: FoundJob): Promise<FoundJob> {
           ? `${posting.baseSalary?.currency === "GBP" ? "£" : (posting.baseSalary?.currency ?? "") + " "}${(sal.minValue ?? sal.value ?? 0).toLocaleString()}${sal.maxValue ? ` – £${sal.maxValue.toLocaleString()}` : ""}${sal.unitText ? ` per ${sal.unitText.toLowerCase()}` : ""}`
           : "";
       const description = htmlToText(posting.description ?? "");
+      const apply = detectApply(html, `${description}\n${pageText(html)}`, job.url);
       return {
         ...job,
+        ...apply,
         title: posting.title?.trim() || job.title,
         company: org?.trim() || job.company,
         location: location || job.location,
@@ -638,7 +675,8 @@ export async function enrichJob(job: FoundJob): Promise<FoundJob> {
       };
     }
     const text = pageText(html);
-    return text.length > job.description.length * 2 ? { ...job, description: text } : job;
+    const apply = detectApply(html, text, job.url);
+    return { ...job, ...apply, description: text.length > job.description.length * 2 ? text : job.description };
   } catch {
     return job;
   }
