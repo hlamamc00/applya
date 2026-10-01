@@ -4,7 +4,8 @@ import type { Config } from "@netlify/functions";
 // the work to scan-background.mts, which may run for up to 15 minutes.
 
 const handler = async () => {
-  const site = (process.env.SITE_URL ?? process.env.URL ?? "").replace(/\/$/, "");
+  // The site's own netlify.app address: it works whatever state the custom domain is in.
+  const site = process.env.SITE_NAME ? `https://${process.env.SITE_NAME}.netlify.app` : (process.env.SITE_URL ?? process.env.URL ?? "").replace(/\/$/, "");
   const secret = process.env.CRON_SECRET;
   if (!site || !secret) {
     console.error("[scan] SITE_URL and CRON_SECRET must be set");

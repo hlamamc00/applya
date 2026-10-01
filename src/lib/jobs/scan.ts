@@ -308,7 +308,9 @@ export async function startScan(trigger: "MANUAL" | "SCHEDULED", options: { only
   if (await scanInProgress()) return { started: false, message: "A scan is already running. New matches appear as it goes; check back in a few minutes." };
   if (process.env.NETLIFY && process.env.CRON_SECRET) {
     const params = options.onlyUserId ? `?user=${encodeURIComponent(options.onlyUserId)}` : "";
-    const res = await fetch(`${siteUrl()}/.netlify/functions/scan-background${params}`, { method: "POST", headers: { authorization: `Bearer ${process.env.CRON_SECRET}`, "x-trigger": trigger } });
+    // The site's own netlify.app address works whatever state the custom domain is in.
+    const internal = process.env.SITE_NAME ? `https://${process.env.SITE_NAME}.netlify.app` : siteUrl();
+    const res = await fetch(`${internal}/.netlify/functions/scan-background${params}`, { method: "POST", headers: { authorization: `Bearer ${process.env.CRON_SECRET}`, "x-trigger": trigger } });
     if (res.status !== 202 && !res.ok) return { started: false, message: `The scan couldn't be started (${res.status}).` };
     return { started: true, message: "Scan started. It runs in the background for a few minutes; refresh this page to see new matches and drafts as they arrive." };
   }

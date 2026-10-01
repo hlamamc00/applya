@@ -7,7 +7,8 @@ export default async (request: Request) => {
   const secret = process.env.CRON_SECRET;
   const given = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (!secret || given !== secret) return new Response("Unauthorised", { status: 401 });
-  const site = (process.env.SITE_URL ?? process.env.URL ?? "").replace(/\/$/, "");
+  // The site's own netlify.app address: it works whatever state the custom domain is in.
+  const site = process.env.SITE_NAME ? `https://${process.env.SITE_NAME}.netlify.app` : (process.env.SITE_URL ?? process.env.URL ?? "").replace(/\/$/, "");
   if (!site) return new Response("SITE_URL is not set", { status: 500 });
 
   const url = new URL(request.url);
