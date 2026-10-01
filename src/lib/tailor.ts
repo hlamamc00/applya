@@ -133,6 +133,7 @@ async function tailorWithAi(input: TailorInput): Promise<TailorOutput> {
       `Profile (JSON):\n${JSON.stringify(profile)}`,
       facts ? `\nFacts for the message:\n${facts}` : "",
     ].join("\n"),
+    budgetMs: 40_000,
   });
   const parsed = aiResult.parse(data);
 

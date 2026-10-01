@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { cvFromProfile } from "@/lib/cv";
 import type { ProfileInput } from "@/lib/actions/profile";
 import { Notice, PageHeader } from "@/components/ui";
+import { Download } from "lucide-react";
+import { fileSafeName } from "@/lib/utils";
+import { isProfileUsable } from "@/lib/cv";
 import type { ParsedProfile } from "@/lib/cv-import";
 import { ProfileForm } from "./profile-form";
 import { CvUploadForm } from "./cv-upload-form";
@@ -64,6 +67,13 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
         eyebrow="Profile & CV"
         title="Your career profile"
         intro="Everything a tailored CV is built from. Keep it complete and current; each application draft adapts it to the role without changing what's here."
+        action={
+          isProfileUsable(profile) ? (
+            <a href="/app/profile/cv.pdf" className="inline-flex items-center gap-2 rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white hover:bg-navy-soft">
+              <Download size={15} /> Download {fileSafeName(user.firstName, user.lastName)}_CV.pdf
+            </a>
+          ) : undefined
+        }
       />
       {welcome && (
         <div className="mb-6">

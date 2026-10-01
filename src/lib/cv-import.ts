@@ -266,6 +266,8 @@ async function parseCvWithAi(text: string): Promise<ParsedProfile> {
       'Reply with a single JSON object only, no markdown, exactly this shape: {"firstName","lastName","headline","summary","phone","location","links":[{"label","url"}],"qualifications":[{"body","name","status","date"}],"skills":[{"group","items":[]}],"experience":[{"title","employer","location","start","end","current","bullets":[]}],"education":[{"institution","qualification","grade","start","end","notes"}],"extraSections":[{"title","items":[]}]}',
     ].join(" "),
     user: text.slice(0, 30_000),
+    // The upload request has ~25 s in all on Netlify; the section parser takes over if this runs out.
+    budgetMs: 18_000,
   });
   return { method: "AI", ...aiProfile.parse(data) };
 }

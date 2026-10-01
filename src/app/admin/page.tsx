@@ -6,7 +6,7 @@ import { providerReport } from "@/lib/llm";
 import { isMailConfigured } from "@/lib/mail";
 import { SOURCE_KIND_LABELS, type SourceKind } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
-import { deleteSource, toggleSource } from "@/lib/actions/admin";
+import { deleteSource, resetAiProviders, toggleSource } from "@/lib/actions/admin";
 import { Badge, Button, Card, CardTitle, PageHeader } from "@/components/ui";
 import { SourceForm } from "./source-form";
 import { AdminScanButton } from "./scan-button";
@@ -86,7 +86,17 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </Card>
 
           <Card>
-            <CardTitle>AI providers</CardTitle>
+            <CardTitle
+              action={
+                <form action={resetAiProviders}>
+                  <Button type="submit" variant="secondary">
+                    Retry all now
+                  </Button>
+                </form>
+              }
+            >
+              AI providers
+            </CardTitle>
             <p className="mb-3 text-sm text-graphite">Each call goes to the first provider that isn&apos;t resting; one that hits its limit rests and the next takes over. Add keys in Netlify → Environment variables (see .env.example); AI_PROVIDER sets the order.</p>
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-graphite">

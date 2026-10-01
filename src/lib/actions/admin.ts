@@ -93,3 +93,11 @@ export async function adminDiscover(_: FormState, formData: FormData): Promise<F
   revalidatePath("/admin", "layout");
   return { ok: describe(report) };
 }
+
+/** Admin → "Retry all providers": clears resting states and cached model picks. */
+export async function resetAiProviders() {
+  await requireAdmin();
+  const { resetProviders } = await import("@/lib/llm");
+  await resetProviders();
+  revalidatePath("/admin", "layout");
+}
