@@ -18,6 +18,11 @@ const profileSchema = z.object({
   headline: short,
   summary: z.string().trim().max(2000),
   phone: z.string().trim().max(40),
+  contactEmail: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .refine((v) => v === "" || z.string().email().safeParse(v).success, "Enter a valid email for the CV, or leave it blank"),
   location: short,
   links: z.array(z.object({ label: short, url: z.string().trim().max(500) })).max(10),
   qualifications: z

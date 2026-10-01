@@ -89,6 +89,8 @@ model Profile {
   headline        String   @default("")
   summary         String   @default("")
   phone           String   @default("")
+  // The address printed on the CV; blank means the sign-in email.
+  contactEmail    String   @default("")
   location        String   @default("")
   links           Json     @default("[]") // [{label, url}]
   qualifications  Json     @default("[]") // [{body, name, status: PASSED|PENDING|PLANNED, date}]

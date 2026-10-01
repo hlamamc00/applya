@@ -57,6 +57,9 @@ export function ProfileForm({ initial }: { initial: ProfileInput }) {
           <Field label="Last name">
             <input className="input" value={p.lastName} onChange={(e) => set("lastName", e.target.value)} required />
           </Field>
+          <Field label="Email on CV" hint="Where employers should write to you. Doesn't change your sign-in email.">
+            <input className="input" type="email" value={p.contactEmail} onChange={(e) => set("contactEmail", e.target.value)} />
+          </Field>
           <Field label="Phone">
             <input className="input" value={p.phone} onChange={(e) => set("phone", e.target.value)} />
           </Field>

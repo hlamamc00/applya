@@ -203,6 +203,7 @@ export function parseCvHeuristically(text: string, known: { firstName: string; l
   const s = splitSections(text);
   const all = text.replace(/\s+/g, " ");
   const phone = /(\+44\s?\d{2,4}|\(?0\d{3,4}\)?)[\s-]?\d{3,4}[\s-]?\d{3,4}/.exec(all)?.[0] ?? "";
+  const contactEmail = /[\w.+-]+@[\w-]+\.[\w.-]+/.exec(all)?.[0]?.toLowerCase() ?? "";
   const withoutEmails = all.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, " ");
   const links = Array.from(withoutEmails.matchAll(/\b(?:https?:\/\/)?(?:www\.)?(linkedin\.com\/in\/[\w-]+|github\.com\/[\w-]+|[\w-]+\.(?:com|co\.uk|io|dev)\/?[\w-]*)\b/gi))
     .map((m) => m[0])
@@ -224,6 +225,7 @@ export function parseCvHeuristically(text: string, known: { firstName: string; l
     headline,
     summary: s.summary.join(" ").slice(0, 2000),
     phone: phone.trim(),
+    contactEmail,
     location,
     links,
     qualifications: parseQualifications(s.qualifications),
@@ -243,6 +245,7 @@ const aiProfile = z.object({
   headline: short,
   summary: z.string().max(2000).default(""),
   phone: short,
+  contactEmail: short,
   location: short,
   links: z.array(z.object({ label: short, url: z.string().max(500) })).max(10).default([]),
   qualifications: z.array(z.object({ body: short, name: short, status: z.enum(["PASSED", "PENDING", "PLANNED"]).default("PASSED"), date: short })).max(60).default([]),
@@ -263,7 +266,7 @@ async function parseCvWithAi(text: string): Promise<ParsedProfile> {
       "qualifications: professional exams, certifications and memberships (not degrees), one per row, with body = the awarding body (e.g. IFoA), status PASSED / PENDING (result awaited or sat) / PLANNED, and date as written.",
       "skills: grouped as the CV groups them (e.g. Technical, Actuarial, Languages); a flat list becomes one group named Skills.",
       "experience bullets: the CV's own bullet points, one string each, most recent role first. extraSections: anything else (interests, volunteering, publications, awards, references).",
-      'Reply with a single JSON object only, no markdown, exactly this shape: {"firstName","lastName","headline","summary","phone","location","links":[{"label","url"}],"qualifications":[{"body","name","status","date"}],"skills":[{"group","items":[]}],"experience":[{"title","employer","location","start","end","current","bullets":[]}],"education":[{"institution","qualification","grade","start","end","notes"}],"extraSections":[{"title","items":[]}]}',
+      'Reply with a single JSON object only, no markdown, exactly this shape: {"firstName","lastName","headline","summary","phone","contactEmail","location","links":[{"label","url"}],"qualifications":[{"body","name","status","date"}],"skills":[{"group","items":[]}],"experience":[{"title","employer","location","start","end","current","bullets":[]}],"education":[{"institution","qualification","grade","start","end","notes"}],"extraSections":[{"title","items":[]}]}',
     ].join(" "),
     user: text.slice(0, 30_000),
     // The upload request has ~25 s in all on Netlify; the section parser takes over if this runs out.

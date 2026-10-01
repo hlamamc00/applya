@@ -66,6 +66,7 @@ type ProfileLike = {
   headline: string;
   summary: string;
   phone: string;
+  contactEmail?: string;
   location: string;
   links: unknown;
   qualifications: unknown;
@@ -82,7 +83,7 @@ export function cvFromProfile(user: { firstName: string; lastName: string; email
   return {
     name: `${user.firstName} ${user.lastName}`.trim(),
     headline: profile.headline,
-    email: user.email,
+    email: profile.contactEmail?.trim() || user.email,
     phone: profile.phone,
     location: profile.location,
     links: asArray<CvLink>(profile.links),
