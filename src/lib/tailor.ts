@@ -1,7 +1,7 @@
 import "server-only";
 import { aiAvailable, generateJson, PROVIDER_LABELS, providerQueue } from "./llm";
 import { z } from "zod";
-import type { CvDocument } from "./cv";
+import { mergedSkills, type CvDocument } from "./cv";
 
 // Adapts a profile to one job advert. With an AI provider configured (see
 // llm.ts: Groq, Gemini, OpenRouter, Cloudflare or Anthropic) and the user's
@@ -119,7 +119,8 @@ async function tailorWithAi(input: TailorInput): Promise<TailorOutput> {
     system: [
       "You tailor a candidate's CV and cover message to one job advert for a UK application.",
       "Rules: never invent qualifications, employers, dates, results or figures; every claim must come from the profile given.",
-      "Rewrite the headline and summary to lead with what this advert values. Reorder skill groups and the items inside them, and reorder each role's bullets, so the most relevant come first; you may tighten wording but keep each bullet's facts. Return every role's bullets in the same role order as given.",
+      "Rewrite the headline and summary to lead with what this advert values. Professional exams are listed in their own section, so in the headline and summary give only the count (e.g. 'six IFoA exams passed') and never list exam names or codes. Keep the summary to three or four sentences.",
+      "Reorder skill groups and the items inside them, and reorder each role's bullets, so the most relevant come first; you may tighten wording but keep each bullet's facts. Keep the profile's own skill group names: do not invent, split or rename groups, and put every skill in exactly one group. Return every role's bullets in the same role order as given.",
       "The cover message is 150–220 words, British English, plain and confident, addressed 'Dear Hiring Team' unless the advert names someone, signed with the candidate's name. Mention availability or notice period only if given. Do not mention salary.",
       'Reply with a single JSON object only, no markdown, exactly this shape: {"headline": string, "summary": string, "skills": [{"group": string, "items": string[]}], "experienceBullets": string[][] (one array per role, same order as the profile), "coverMessage": string}',
     ].join(" "),
@@ -146,7 +147,9 @@ async function tailorWithAi(input: TailorInput): Promise<TailorOutput> {
   const returned = parsed.skills.map((g) => ({ group: g.group, items: g.items.filter((s) => knownSkills.has(s.toLowerCase())) })).filter((g) => g.items.length);
   const mentioned = new Set(returned.flatMap((g) => g.items.map((s) => s.toLowerCase())));
   const leftover = cv.skills.map((g) => ({ group: g.group, items: g.items.filter((s) => !mentioned.has(s.toLowerCase())) })).filter((g) => g.items.length);
-  out.skills = returned.length ? [...returned, ...leftover] : cv.skills;
+  // Skills the model left out go back into the group of the same name, or a
+  // close one, rather than forming a second group with a similar name.
+  out.skills = returned.length ? mergedSkills([...returned, ...leftover]) : cv.skills;
   out.experience = cv.experience.map((e, i) => {
     const bullets = parsed.experienceBullets[i];
     return bullets && bullets.length > 0 ? { ...e, bullets } : e;

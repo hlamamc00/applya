@@ -56,7 +56,7 @@ function tidy(input: ProfileInput): ProfileInput {
   const nonEmpty = (s: string) => s.trim().length > 0;
   return {
     ...input,
-    links: input.links.filter((l) => nonEmpty(l.url)),
+    links: input.links.filter((l) => nonEmpty(l.url) && !l.url.includes("@")),
     qualifications: input.qualifications.filter((q) => nonEmpty(q.name)),
     skills: input.skills.map((g) => ({ ...g, items: g.items.filter(nonEmpty) })).filter((g) => g.items.length > 0),
     experience: input.experience.map((e) => ({ ...e, bullets: e.bullets.filter(nonEmpty) })).filter((e) => nonEmpty(e.title) || nonEmpty(e.employer)),

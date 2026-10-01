@@ -1,7 +1,5 @@
-import type { CvDocument } from "@/lib/cv";
+import { contactItems, mergedSkills, qualificationLines, type CvDocument } from "@/lib/cv";
 import { monthLabel } from "@/lib/utils";
-
-const statusLabel = { PASSED: "Passed", PENDING: "Result awaited", PLANNED: "Planned" } as const;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -18,31 +16,26 @@ export function CvPreview({ cv }: { cv: CvDocument }) {
     <div className="rounded-lg border border-mist bg-paper p-6 text-[14px] leading-relaxed sm:p-8">
       <h2 className="font-serif text-2xl text-navy">{cv.name}</h2>
       {cv.headline && <p className="font-semibold text-green">{cv.headline}</p>}
-      <p className="text-xs text-graphite">{[cv.location, cv.phone, cv.email, ...cv.links.map((l) => l.url.replace(/^https?:\/\/(www\.)?/, ""))].filter(Boolean).join("  ·  ")}</p>
+      <p className="text-xs text-graphite">{contactItems(cv).join("  ·  ")}</p>
 
       {cv.summary && (
         <Section title="Profile">
           <p>{cv.summary}</p>
         </Section>
       )}
-      {cv.qualifications.length > 0 && (
+      {qualificationLines(cv).length > 0 && (
         <Section title="Professional qualifications">
-          <ul>
-            {cv.qualifications.map((q, i) => (
-              <li key={i} className="flex justify-between gap-3">
-                <span>
-                  {q.body ? `${q.body} ` : ""}
-                  {q.name}
-                </span>
-                <span className="text-graphite">{[statusLabel[q.status], q.date].filter(Boolean).join(", ")}</span>
-              </li>
-            ))}
-          </ul>
+          {qualificationLines(cv).map((q) => (
+            <p key={q.body}>
+              <strong>{q.body}: </strong>
+              {q.parts.join("  ·  ")}
+            </p>
+          ))}
         </Section>
       )}
       {cv.skills.length > 0 && (
         <Section title="Skills">
-          {cv.skills.map((g, i) => (
+          {mergedSkills(cv.skills).map((g, i) => (
             <p key={i}>
               {g.group && <strong>{g.group}: </strong>}
               {g.items.join(", ")}

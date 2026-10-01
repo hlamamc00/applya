@@ -133,3 +133,100 @@ export function isProfileUsable(profile: ProfileLike | null) {
   if (!profile) return false;
   return Boolean(profile.summary.trim()) && asArray(profile.experience).length + asArray(profile.education).length > 0;
 }
+
+// --- Presentation helpers shared by the PDF and the on-screen preview -------
+
+const norm = (s: string) => s.trim().toLowerCase();
+
+/** The contact line: location, phone, email and links, each once. Email addresses saved as "links" are dropped. */
+export function contactItems(cv: CvDocument): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (v: string) => {
+    const t = v.trim();
+    const key = norm(t.replace(/^mailto:/i, "").replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, ""));
+    if (!t || seen.has(key)) return;
+    seen.add(key);
+    out.push(t);
+  };
+  add(cv.location);
+  add(cv.phone);
+  add(cv.email);
+  for (const l of cv.links) {
+    const url = l.url.trim();
+    if (!url || url.includes("@")) continue;
+    add(url.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, ""));
+  }
+  return out;
+}
+
+/** "CS1 Actuarial Statistics" → "CS1"; names without an exam code are kept whole. */
+function shortExamName(name: string) {
+  const code = /^\s*([A-Z]{1,4}\d{1,3}[A-Z]?)\b/.exec(name);
+  return code ? code[1] : name.trim();
+}
+
+export interface QualificationLine {
+  body: string;
+  /** e.g. ["Passed: CM1, CS1, CB1", "Results awaited: CP3, CS2"] */
+  parts: string[];
+}
+
+/** Exams grouped by awarding body, one line each: no dates, codes rather than full titles. */
+export function qualificationLines(cv: CvDocument): QualificationLine[] {
+  const bodies = new Map<string, CvQualification[]>();
+  for (const q of cv.qualifications) {
+    if (!q.name.trim()) continue;
+    const body = q.body.trim() || "Qualifications";
+    bodies.set(body, [...(bodies.get(body) ?? []), q]);
+  }
+  const labels: Record<CvQualification["status"], string> = { PASSED: "Passed", PENDING: "Results awaited", PLANNED: "Planned" };
+  return [...bodies.entries()].map(([body, items]) => ({
+    body,
+    parts: (["PASSED", "PENDING", "PLANNED"] as const)
+      .map((status) => {
+        const names = [...new Set(items.filter((q) => q.status === status).map((q) => shortExamName(q.name)))];
+        return names.length ? `${labels[status]}: ${names.join(", ")}` : "";
+      })
+      .filter(Boolean),
+  }));
+}
+
+const groupWords = (g: string) => new Set(norm(g).split(/[^a-z0-9]+/).filter((w) => w && w !== "and"));
+
+/**
+ * Skill groups as printed: a group whose name is contained in another's
+ * ("Technology" in "Data & Technology", "Actuarial" in "Pensions &
+ * Actuarial") is folded into it, and repeated items are dropped.
+ */
+export function mergedSkills(skills: CvSkillGroup[]): CvSkillGroup[] {
+  const groups = skills.map((g) => ({ group: g.group.trim(), items: [...g.items] })).filter((g) => g.items.some((i) => i.trim()));
+  const merged: CvSkillGroup[] = [];
+  for (const g of groups) {
+    const words = groupWords(g.group);
+    const into = merged.find((m) => {
+      const mw = groupWords(m.group);
+      if (!words.size || !mw.size) return norm(m.group) === norm(g.group);
+      return [...words].every((w) => mw.has(w)) || [...mw].every((w) => words.has(w));
+    });
+    if (into) {
+      // Keep the longer, more descriptive name.
+      if (g.group.length > into.group.length) into.group = g.group;
+      into.items.push(...g.items);
+    } else {
+      merged.push(g);
+    }
+  }
+  const seenItems = new Set<string>();
+  return merged
+    .map((g) => ({
+      group: g.group,
+      items: g.items.map((i) => i.trim()).filter((i) => {
+        const k = norm(i);
+        if (!k || seenItems.has(k)) return false;
+        seenItems.add(k);
+        return true;
+      }),
+    }))
+    .filter((g) => g.items.length);
+}

@@ -1,6 +1,6 @@
 import "server-only";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import type { CvDocument } from "./cv";
+import { contactItems, mergedSkills, qualificationLines, type CvDocument } from "./cv";
 import { monthLabel } from "./utils";
 
 // Renders a CvDocument as a clean single-column A4 PDF: name and contact
@@ -123,7 +123,17 @@ function sanitize(text: string) {
     .replace(/[^\x00-\x7F -ÿ–—•€]/g, "");
 }
 
-const statusLabel = { PASSED: "Passed", PENDING: "Result awaited", PLANNED: "Planned" } as const;
+/** A bold label followed by text that wraps under itself, e.g. "Technology: Python, R, SQL". */
+function labelledLine(w: Writer, fonts: { regular: PDFFont; bold: PDFFont }, label: string, text: string, size = 10) {
+  const labelWidth = label ? fonts.bold.widthOfTextAtSize(sanitize(label), size) + 2 : 0;
+  const lines = w.wrap(sanitize(text), fonts.regular, size, WIDTH - labelWidth);
+  lines.forEach((line, i) => {
+    w.ensure(size * 1.38);
+    if (i === 0 && label) w.page.drawText(sanitize(label), { x: MARGIN.left, y: w.y - size, size, font: fonts.bold, color: INK });
+    w.page.drawText(line, { x: MARGIN.left + labelWidth, y: w.y - size, size, font: fonts.regular, color: INK });
+    w.y -= size * 1.38;
+  });
+}
 
 export async function renderCvPdf(cv: CvDocument): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -139,7 +149,7 @@ export async function renderCvPdf(cv: CvDocument): Promise<Uint8Array> {
   // Name and contact line.
   w.text(cv.name, { font: fonts.serif, size: 24, color: NAVY, lineHeight: 28 });
   if (cv.headline) w.text(cv.headline, { size: 11, color: GREEN, font: fonts.bold, lineHeight: 15 });
-  const contact = [cv.location, cv.phone, cv.email, ...cv.links.map((l) => l.url.replace(/^https?:\/\/(www\.)?/, ""))].filter(Boolean).join("  ·  ");
+  const contact = contactItems(cv).join("  ·  ");
   if (contact) w.text(contact, { size: 9, color: GREY, lineHeight: 13 });
   w.space(4);
 
@@ -148,39 +158,18 @@ export async function renderCvPdf(cv: CvDocument): Promise<Uint8Array> {
     w.text(cv.summary, { size: 10, after: 2 });
   }
 
-  if (cv.qualifications.length) {
+  // Exams on one line per awarding body, codes only and no dates, to keep the CV short.
+  const quals = qualificationLines(cv);
+  if (quals.length) {
     w.heading("Professional qualifications");
-    const order = { PASSED: 0, PENDING: 1, PLANNED: 2 };
-    const groups = new Map<string, typeof cv.qualifications>();
-    for (const q of [...cv.qualifications].sort((a, b) => order[a.status] - order[b.status])) {
-      const key = q.body || "Qualifications";
-      groups.set(key, [...(groups.get(key) ?? []), q]);
-    }
-    for (const [body, items] of groups) {
-      const passed = items.filter((q) => q.status === "PASSED");
-      if (passed.length) w.row(`${body}: ${passed.length} exam${passed.length === 1 ? "" : "s"} passed`, "", { size: 10 });
-      for (const q of items) {
-        const right = [statusLabel[q.status], q.date].filter(Boolean).join(", ");
-        w.row(q.name, right, { font: fonts.regular, size: 9.5 });
-      }
-      w.space(3);
-    }
+    for (const q of quals) labelledLine(w, fonts, `${q.body}: `, q.parts.join("  ·  "));
+    w.space(2);
   }
 
-  if (cv.skills.length) {
+  const skills = mergedSkills(cv.skills);
+  if (skills.length) {
     w.heading("Skills");
-    for (const g of cv.skills) {
-      const label = g.group ? `${g.group}: ` : "";
-      const size = 10;
-      const labelWidth = fonts.bold.widthOfTextAtSize(sanitize(label), size);
-      const lines = w.wrap(sanitize(g.items.join(", ")), fonts.regular, size, WIDTH - labelWidth);
-      lines.forEach((line, i) => {
-        w.ensure(size * 1.38);
-        if (i === 0 && label) w.page.drawText(sanitize(label), { x: MARGIN.left, y: w.y - size, size, font: fonts.bold, color: INK });
-        w.page.drawText(line, { x: MARGIN.left + labelWidth, y: w.y - size, size, font: fonts.regular, color: INK });
-        w.y -= size * 1.38;
-      });
-    }
+    for (const g of skills) labelledLine(w, fonts, g.group ? `${g.group}: ` : "", g.items.join(", "));
   }
 
   if (cv.experience.length) {
