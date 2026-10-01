@@ -6,12 +6,24 @@ import { formatDate, formatDateTime } from "@/lib/utils";
 import { Card, CardTitle, PageHeader } from "@/components/ui";
 import { PasswordForm } from "./password-form";
 import { MailboxForm } from "./mailbox-form";
+import { oauthConfigured } from "@/lib/mail-oauth";
 
 export const metadata: Metadata = { title: "Account" };
 
-export default async function SettingsPage() {
+const mailNotices: Record<string, { tone: "green" | "red" | "amber"; text: string }> = {
+  connected: { tone: "green", text: "Mailbox connected." },
+  denied: { tone: "amber", text: "Access wasn't granted, so nothing was connected." },
+  failed: { tone: "red", text: "The connection didn't complete." },
+  invalid: { tone: "red", text: "That link had expired or didn't match your session. Start again from this page." },
+  unavailable: { tone: "amber", text: "That provider isn't set up on this site yet." },
+};
+
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ mail?: string; email?: string; detail?: string }> }) {
   const user = await requireUser("/app/settings");
+  const { mail, email, detail } = await searchParams;
   const mailbox = await db.mailAccount.findUnique({ where: { userId: user.id } });
+  const base = mail ? mailNotices[mail] : null;
+  const notice = base ? { ...base, text: `${base.text}${mail === "connected" && email ? ` Applications will be sent from ${email}.` : ""}${detail ? ` ${detail}` : ""}` } : null;
   return (
     <>
       <PageHeader eyebrow="Account" title="Account settings" />
@@ -19,9 +31,11 @@ export default async function SettingsPage() {
         <Card className="lg:col-span-2">
           <CardTitle>Your mailbox</CardTitle>
           <MailboxForm
-            connected={mailbox ? { fromEmail: mailbox.fromEmail, fromName: mailbox.fromName, host: mailbox.host, verifiedAt: formatDateTime(mailbox.verifiedAt), lastError: mailbox.lastError } : null}
+            connected={mailbox ? { kind: mailbox.kind, fromEmail: mailbox.fromEmail, fromName: mailbox.fromName, host: mailbox.host, verifiedAt: formatDateTime(mailbox.verifiedAt), lastError: mailbox.lastError } : null}
             defaultEmail={user.email}
             defaultName={`${user.firstName} ${user.lastName}`}
+            oauth={{ google: oauthConfigured("google"), microsoft: oauthConfigured("microsoft") }}
+            notice={notice}
           />
         </Card>
         <Card>

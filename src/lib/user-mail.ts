@@ -3,9 +3,10 @@ import nodemailer from "nodemailer";
 import { db } from "./db";
 import { decrypt, encrypt } from "./crypto";
 import type { MailAttachment } from "./mail";
+import { sendViaGmail, sendViaOutlook } from "./mail-oauth";
 
-// Sending from the person's own mailbox over SMTP. Gmail and Outlook both
-// accept an app password; any other provider works with its SMTP details.
+// Sending from the person's own mailbox: Gmail or Outlook connected with
+// OAuth (mail-oauth.ts), or any provider over SMTP with an app password.
 
 export const MAIL_PRESETS = {
   gmail: { label: "Gmail / Google Workspace", host: "smtp.gmail.com", port: 587, help: "Turn on 2-step verification, then create an app password at myaccount.google.com/apppasswords and use it here." },
@@ -37,7 +38,7 @@ function transportFor(account: { host: string; port: number; username: string; p
   });
 }
 
-/** Saves the mailbox after checking the login works. Returns an error message, or null. */
+/** Saves an SMTP mailbox after checking the login works. Returns an error message, or null. */
 export async function saveMailAccount(userId: string, input: MailAccountInput): Promise<string | null> {
   const passwordEnc = encrypt(input.password);
   const transport = transportFor({ host: input.host, port: input.port, username: input.username, passwordEnc });
@@ -47,23 +48,42 @@ export async function saveMailAccount(userId: string, input: MailAccountInput): 
     const message = error instanceof Error ? error.message : String(error);
     return /auth|535|534|credential|password/i.test(message) ? `The mailbox refused the login: ${message}` : `Couldn't reach ${input.host}:${input.port}: ${message}`;
   }
-  await db.mailAccount.upsert({
-    where: { userId },
-    create: { userId, host: input.host, port: input.port, username: input.username, passwordEnc, fromName: input.fromName, fromEmail: input.fromEmail, verifiedAt: new Date() },
-    update: { host: input.host, port: input.port, username: input.username, passwordEnc, fromName: input.fromName, fromEmail: input.fromEmail, verifiedAt: new Date(), lastError: null },
-  });
+  const data = {
+    kind: "SMTP",
+    host: input.host,
+    port: input.port,
+    username: input.username,
+    passwordEnc,
+    fromName: input.fromName,
+    fromEmail: input.fromEmail,
+    verifiedAt: new Date(),
+    lastError: null,
+    accessTokenEnc: null,
+    refreshTokenEnc: null,
+    tokenExpiresAt: null,
+    providerAccountId: null,
+    scopes: null,
+  };
+  await db.mailAccount.upsert({ where: { userId }, create: { userId, ...data }, update: data });
   return null;
 }
 
-/** Sends from the user's mailbox. Returns the provider's message id. Throws with a readable message. */
+/** Sends from the user's mailbox, whichever kind. Returns the provider's message id. Throws with a readable message. */
 export async function sendFromUser(userId: string, message: { to: string; subject: string; text: string; attachments?: MailAttachment[] }) {
   const account = await db.mailAccount.findUnique({ where: { userId } });
   if (!account) throw new Error("Connect your mailbox under Account first.");
-  const from = account.fromName ? `${account.fromName} <${account.fromEmail}>` : account.fromEmail;
   try {
-    const info = await transportFor(account).sendMail({ from, to: message.to, subject: message.subject, text: message.text, attachments: message.attachments });
+    let id: string;
+    if (account.kind === "GMAIL") id = await sendViaGmail(account, message);
+    else if (account.kind === "OUTLOOK") id = await sendViaOutlook(account, message);
+    else {
+      if (!account.host || !account.port || !account.username || !account.passwordEnc) throw new Error("The SMTP details are incomplete; connect the mailbox again.");
+      const from = account.fromName ? `${account.fromName} <${account.fromEmail}>` : account.fromEmail;
+      const info = await transportFor({ host: account.host, port: account.port, username: account.username, passwordEnc: account.passwordEnc }).sendMail({ from, to: message.to, subject: message.subject, text: message.text, attachments: message.attachments });
+      id = info.messageId as string;
+    }
     await db.mailAccount.update({ where: { userId }, data: { lastError: null } });
-    return info.messageId as string;
+    return id;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await db.mailAccount.update({ where: { userId }, data: { lastError: detail } });

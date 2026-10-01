@@ -14,17 +14,35 @@ const presets = [
   { key: "other", label: "Other (enter SMTP details)", help: "Your provider's SMTP host, port and login." },
 ];
 
-export function MailboxForm({ connected, defaultEmail, defaultName }: { connected: { fromEmail: string; fromName: string; host: string; verifiedAt: string; lastError: string | null } | null; defaultEmail: string; defaultName: string }) {
+interface Connected {
+  kind: string;
+  fromEmail: string;
+  fromName: string;
+  host: string | null;
+  verifiedAt: string;
+  lastError: string | null;
+}
+
+interface OAuthOptions {
+  google: boolean;
+  microsoft: boolean;
+}
+
+const kindLabel: Record<string, string> = { GMAIL: "Gmail", OUTLOOK: "Outlook", SMTP: "SMTP" };
+
+export function MailboxForm({ connected, defaultEmail, defaultName, oauth, notice }: { connected: Connected | null; defaultEmail: string; defaultName: string; oauth: OAuthOptions; notice: { tone: "green" | "red" | "amber"; text: string } | null }) {
   const [state, action] = useActionState<FormState, FormData>(connectMailbox, {});
   const [test, testAction] = useActionState<FormState, FormData>(async () => sendTestEmail(), {});
   const [preset, setPreset] = useState("gmail");
+  const [showSmtp, setShowSmtp] = useState(!oauth.google && !oauth.microsoft);
   const chosen = presets.find((p) => p.key === preset)!;
 
   if (connected) {
     return (
       <div className="space-y-3">
+        {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
         <Notice tone="green">
-          Applications are sent from <strong>{connected.fromName ? `${connected.fromName} <${connected.fromEmail}>` : connected.fromEmail}</strong> via {connected.host}. Verified {connected.verifiedAt}.
+          Applications are sent from <strong>{connected.fromName ? `${connected.fromName} <${connected.fromEmail}>` : connected.fromEmail}</strong> via {connected.kind === "SMTP" ? connected.host : kindLabel[connected.kind]}. Connected {connected.verifiedAt}.
         </Notice>
         {connected.lastError && <Notice tone="red">Last send failed: {connected.lastError}</Notice>}
         {test.ok && <Notice tone="green">{test.ok}</Notice>}
@@ -41,14 +59,41 @@ export function MailboxForm({ connected, defaultEmail, defaultName }: { connecte
             </Button>
           </form>
         </div>
-        <p className="text-xs text-graphite">The app password is stored encrypted. Disconnecting deletes it; messages already sent stay in your mailbox&apos;s Sent folder.</p>
+        <p className="text-xs text-graphite">
+          {connected.kind === "SMTP" ? "The app password is stored encrypted." : `Applya holds only permission to send; it cannot read your ${kindLabel[connected.kind]} inbox. You can also revoke it from your ${connected.kind === "GMAIL" ? "Google" : "Microsoft"} account's connected apps.`} Disconnecting deletes the stored credentials; messages already sent stay in your Sent folder.
+        </p>
       </div>
     );
   }
 
+  const oauthButtons = (oauth.google || oauth.microsoft) && (
+    <div className="space-y-3">
+      {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
+      <p className="text-sm text-graphite">Connect your own mailbox so approved applications go to employers from your address, with the CV attached, and appear in your Sent folder. Applya asks only for permission to send.</p>
+      <div className="flex flex-wrap gap-2">
+        {oauth.google && (
+          <a href="/api/mail/google/start" className="inline-flex items-center gap-2 rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white hover:bg-navy-soft">
+            Connect Gmail
+          </a>
+        )}
+        {oauth.microsoft && (
+          <a href="/api/mail/microsoft/start" className="inline-flex items-center gap-2 rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white hover:bg-navy-soft">
+            Connect Outlook
+          </a>
+        )}
+        <Button type="button" variant="ghost" onClick={() => setShowSmtp((v) => !v)}>
+          {showSmtp ? "Hide" : "Another provider (SMTP)"}
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
+    <div className="space-y-5">
+      {oauthButtons}
+      {showSmtp && (
     <form action={action} className="space-y-4">
-      <p className="text-sm text-graphite">Connect your own mailbox so approved applications go to employers from your address, with the CV attached, and appear in your Sent folder.</p>
+      {!oauthButtons && <p className="text-sm text-graphite">Connect your own mailbox so approved applications go to employers from your address, with the CV attached, and appear in your Sent folder.</p>}
       <Field label="Provider">
         <select className="select" name="preset" value={preset} onChange={(e) => setPreset(e.target.value)}>
           {presets.map((p) => (
@@ -87,5 +132,7 @@ export function MailboxForm({ connected, defaultEmail, defaultName }: { connecte
       {state.ok && <Notice tone="green">{state.ok}</Notice>}
       <SubmitButton pending="Checking the login…">Connect mailbox</SubmitButton>
     </form>
+      )}
+    </div>
   );
 }

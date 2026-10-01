@@ -81,7 +81,12 @@ An application holds the job, its CV versions, the cover message, private notes 
 
 ### Sending from the person's own email (`/app/settings`)
 
-Under **Account → Your mailbox** a person connects their own mailbox over SMTP: Gmail, Outlook, Yahoo and iCloud presets (each takes an app password), or any provider's SMTP details. The login is checked before it is saved and the password is stored encrypted (AES-256-GCM, key derived from `AUTH_SECRET`; `src/lib/crypto.ts`). Approved applications are then sent from that address (`src/lib/user-mail.ts`), so they appear in the person's Sent folder and replies come straight back to them. The application records the recipient and the provider's message id.
+Under **Account → Your mailbox** a person connects their own mailbox, two ways:
+
+- **Connect Gmail / Connect Outlook** (OAuth, `src/lib/mail-oauth.ts`): Applya asks only for permission to send (`gmail.send`; `Mail.Send` + `User.Read` + `offline_access`), never to read the inbox. Tokens are stored encrypted and refreshed automatically; Gmail sends through the Gmail API, Outlook through Microsoft Graph with `saveToSentItems`. Needs `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and/or `MICROSOFT_CLIENT_ID`/`MICROSOFT_CLIENT_SECRET`; set-up steps are at the top of `mail-oauth.ts`. Until Google verifies the app, add each Gmail user as a test user on the OAuth consent screen.
+- **Another provider (SMTP)**: Gmail, Outlook, Yahoo and iCloud presets with an app password, or any SMTP details. The login is checked before it is saved and the password is stored encrypted (AES-256-GCM, key derived from `AUTH_SECRET`; `src/lib/crypto.ts`).
+
+Approved applications are then sent from that address (`src/lib/user-mail.ts`), so they appear in the person's Sent folder and replies come straight back to them. The application records the recipient and the provider's message id.
 - The PDF (`/app/applications/<id>/cv.pdf`, `src/lib/cv-pdf.ts`) is always named `Firstname_Lastname_CV.pdf`, whatever the job. Layout: name and contact line, headline, profile, professional qualifications (passed first), skills, experience (reverse chronological), education, extra sections.
 
 ## Configuration
@@ -100,6 +105,7 @@ All settings are environment variables; `.env.example` lists them.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Password-reset and review emails (optional; nothing is sent without them) |
 | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `REED_API_KEY`, `RAPIDAPI_KEY`, `JOOBLE_API_KEY`, `CAREERJET_API_KEY` | The keyed aggregator sources (optional) |
 | `BRAVE_SEARCH_API_KEY` | Web discovery of sources without an Anthropic key (optional) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | "Connect Gmail" / "Connect Outlook" (optional; SMTP works without) |
 
 ## Deploying to Netlify with Neon
 

@@ -41,22 +41,31 @@ model User {
   mailAccount           MailAccount?
 }
 
-/// The person's own mailbox, so applications go out from their address.
-/// SMTP works with any provider (Gmail and Outlook with an app password);
-/// the password is encrypted with a key derived from AUTH_SECRET.
+/// The person's own mailbox, so applications go out from their address:
+/// Gmail or Outlook connected with OAuth (tokens encrypted), or any
+/// provider over SMTP with an app password (encrypted with a key derived
+/// from AUTH_SECRET).
 model MailAccount {
-  id            String    @id @default(cuid())
-  userId        String    @unique
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  host          String
-  port          Int       @default(587)
-  username      String
-  passwordEnc   String
-  fromName      String    @default("")
-  fromEmail     String
-  verifiedAt    DateTime?
-  lastError     String?
-  updatedAt     DateTime  @updatedAt
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind              String    @default("SMTP") // SMTP | GMAIL | OUTLOOK
+  fromName          String    @default("")
+  fromEmail         String
+  // SMTP
+  host              String?
+  port              Int?
+  username          String?
+  passwordEnc       String?
+  // OAuth
+  providerAccountId String?
+  accessTokenEnc    String?
+  refreshTokenEnc   String?
+  tokenExpiresAt    DateTime?
+  scopes            String?
+  verifiedAt        DateTime?
+  lastError         String?
+  updatedAt         DateTime  @updatedAt
 }
 
 /// Attempts at an action (signing in, password emails) per visitor or email,
