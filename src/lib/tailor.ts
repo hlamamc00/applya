@@ -1,5 +1,5 @@
 import "server-only";
-import { activeProvider, aiAvailable, generateJson, PROVIDER_LABELS } from "./llm";
+import { aiAvailable, generateJson, PROVIDER_LABELS, providerQueue } from "./llm";
 import { z } from "zod";
 import type { CvDocument } from "./cv";
 
@@ -78,10 +78,10 @@ export function aiTailoringAvailable() {
   return aiAvailable();
 }
 
-/** What the admin page shows: which service writes the drafts. */
+/** What the admin page shows: which services write the drafts, in order. */
 export function aiTailoringLabel() {
-  const p = activeProvider();
-  return p ? PROVIDER_LABELS[p] : null;
+  const q = providerQueue();
+  return q.length ? q.map((p) => PROVIDER_LABELS[p].replace(/ \(.*\)$/, "")).join(" → ") : null;
 }
 
 /** Tailors with the AI provider; falls back to the keyword pass if none is set or the call fails. */

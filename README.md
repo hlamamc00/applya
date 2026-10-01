@@ -59,7 +59,7 @@ The seed adds The Actuary Jobs (the IFoA's board) and reed.co.uk searches for "a
 
 `src/lib/tailor.ts` adapts the profile to one advert. With an AI provider configured and the user's AI tailoring switch on, the model rewrites the headline and summary, reorders skills and each role's bullets, and drafts a 150–220 word cover message; facts are checked back against the profile so nothing invented survives. Without a key (or with the switch off) a keyword pass does the reordering and fills in a plain-worded message. Each `CvVersion` records which method produced it.
 
-`src/lib/llm.ts` is the one place that talks to a model. Set any one key and it is used (or pick with `AI_PROVIDER`):
+`src/lib/llm.ts` is the one place that talks to a model. Every provider with a key is queued, free tiers first and Anthropic last; a call goes to the first provider that isn't resting, and one that answers with a rate limit, exhausted quota, an outage or unusable output is rested (5 min for a rate limit, an hour for quota, 6 h for a rejected key) while the next takes over. `AiProviderState` keeps the rests and counts; Admin shows them. `AI_PROVIDER` sets the order.
 
 | Provider | Key | Cost |
 | --- | --- | --- |
@@ -69,7 +69,7 @@ The seed adds The Actuary Jobs (the IFoA's board) and reed.co.uk searches for "a
 | Cloudflare Workers AI | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` | free daily allowance |
 | Anthropic Claude | `ANTHROPIC_API_KEY` | paid |
 
-`AI_MODEL` overrides the provider's default model. Web discovery of sources uses Brave Search (`BRAVE_SEARCH_API_KEY`, free tier) or Claude's web search.
+`GROQ_MODEL`, `GEMINI_MODEL`, `OPENROUTER_MODEL`, `CLOUDFLARE_AI_MODEL` and `ANTHROPIC_MODEL` override the defaults. Web discovery of sources uses Brave Search (`BRAVE_SEARCH_API_KEY`, free tier) or Claude's web search.
 
 ### Applications and approval (`/app/applications`)
 
@@ -96,7 +96,7 @@ All settings are environment variables; `.env.example` lists them.
 | `SITE_URL` | Absolute site URL, for links in emails and the scheduled scan |
 | `CRON_SECRET` | Protects `/api/scan` |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_FIRST_NAME`, `SEED_ADMIN_LAST_NAME` | The first admin account, created by the seed if it doesn't exist |
-| `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_AI_TOKEN` / `ANTHROPIC_API_KEY`, `AI_PROVIDER`, `AI_MODEL` | AI tailoring and CV reading (optional; any one key; keyword tailoring without) |
+| `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_AI_TOKEN`, `ANTHROPIC_API_KEY`, `AI_PROVIDER`, `*_MODEL` | AI tailoring and CV reading (optional; all keys set are queued as backups for each other) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Password-reset and review emails (optional; nothing is sent without them) |
 | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `REED_API_KEY`, `RAPIDAPI_KEY`, `JOOBLE_API_KEY`, `CAREERJET_API_KEY` | The keyed aggregator sources (optional) |
 | `BRAVE_SEARCH_API_KEY` | Web discovery of sources without an Anthropic key (optional) |

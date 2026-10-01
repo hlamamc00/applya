@@ -248,6 +248,18 @@ model ApplicationEvent {
   @@index([applicationId, createdAt])
 }
 
+/// How each AI provider is doing, so a limit reached on one moves calls to
+/// the next and the admin page can show it.
+model AiProviderState {
+  provider      String    @id
+  cooldownUntil DateTime?
+  lastError     String?
+  lastUsedAt    DateTime?
+  calls         Int       @default(0)
+  failures      Int       @default(0)
+  updatedAt     DateTime  @default(now()) @updatedAt
+}
+
 /// One run of the scanner. A run is done in short steps (each HTTP call to
 /// /api/scan does ~20 seconds of work) so it fits serverless time limits;
 /// progress holds where the run has got to between steps.

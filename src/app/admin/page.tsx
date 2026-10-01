@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { db } from "@/lib/db";
 import { sourceReady } from "@/lib/jobs/sources";
 import { aiTailoringAvailable, aiTailoringLabel } from "@/lib/tailor";
+import { providerReport } from "@/lib/llm";
 import { isMailConfigured } from "@/lib/mail";
 import { SOURCE_KIND_LABELS, type SourceKind } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
@@ -15,6 +16,7 @@ export const metadata: Metadata = { title: "Admin" };
 
 export default async function AdminPage({ searchParams }: { searchParams: Promise<{ edit?: string }> }) {
   const { edit } = await searchParams;
+  const providers = await providerReport();
   const [sources, runs, jobCount, editing] = await Promise.all([
     db.jobSource.findMany({ orderBy: [{ enabled: "desc" }, { name: "asc" }], include: { _count: { select: { jobs: true } } } }),
     db.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 15 }),
@@ -26,7 +28,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader eyebrow="Admin" title="Sources and scans" intro={`${jobCount} open adverts in the database.`} action={<AdminScanButton />} />
       <div className="mb-6 flex flex-wrap gap-2 text-sm">
-        <Badge tone={aiTailoringAvailable() ? "green" : "amber"}>{aiTailoringAvailable() ? `AI: ${aiTailoringLabel()}` : "AI off (no GROQ_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY)"}</Badge>
+        <Badge tone={aiTailoringAvailable() ? "green" : "amber"}>{aiTailoringAvailable() ? `AI: ${aiTailoringLabel()}` : "AI off (no provider key set)"}</Badge>
         <Badge tone={isMailConfigured() ? "green" : "amber"}>{isMailConfigured() ? "Email on" : "Email off (no SMTP settings)"}</Badge>
         <Badge tone={sourceReady("ADZUNA") ? "green" : "neutral"}>Adzuna {sourceReady("ADZUNA") ? "keys set" : "keys not set"}</Badge>
         <Badge tone={sourceReady("REED") ? "green" : "neutral"}>Reed API {sourceReady("REED") ? "key set" : "key not set"}</Badge>
@@ -81,6 +83,35 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 })}
               </ul>
             )}
+          </Card>
+
+          <Card>
+            <CardTitle>AI providers</CardTitle>
+            <p className="mb-3 text-sm text-graphite">Each call goes to the first provider that isn&apos;t resting; one that hits its limit rests and the next takes over. Add keys in Netlify → Environment variables (see .env.example); AI_PROVIDER sets the order.</p>
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-graphite">
+                <tr>
+                  <th className="py-1 pr-3">#</th>
+                  <th className="py-1 pr-3">Provider</th>
+                  <th className="py-1 pr-3">Model</th>
+                  <th className="py-1 pr-3">Calls</th>
+                  <th className="py-1">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {providers.map((p) => (
+                  <tr key={p.provider} className="border-t border-cloud align-top">
+                    <td className="py-1.5 pr-3">{p.configured ? p.position : "–"}</td>
+                    <td className="py-1.5 pr-3">{p.label}</td>
+                    <td className="py-1.5 pr-3 text-xs">{p.configured ? p.model : ""}</td>
+                    <td className="py-1.5 pr-3">{p.calls}{p.failures ? ` (${p.failures} failed)` : ""}</td>
+                    <td className="py-1.5 text-xs">
+                      {!p.configured ? <span className="text-steel">no key</span> : p.resting ? <span className="text-amber">resting until {formatDateTime(p.resting)}: {p.lastError}</span> : <span className="text-green">ready{p.lastUsedAt ? ` · last used ${formatDateTime(p.lastUsedAt)}` : ""}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </Card>
 
           <Card>
