@@ -9,6 +9,7 @@ import { isMailConfigured, onNetlify, sendMail, simpleEmail, siteUrl } from "./m
 import type { MailAttachment } from "./mail";
 import { fileSafeName } from "./utils";
 import { decrypt } from "./crypto";
+import { findAlternativeAdverts } from "./jobs/alternatives";
 import type { ApplyPacket, FormField, PlannedValue } from "./apply-runner";
 
 // Submitting an approved application: by email from the person's own
@@ -145,6 +146,9 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
   const link = (re: RegExp) => base.links.find((l) => re.test(l.url))?.url ?? "";
   const salary = profile.salaryMin && profile.salaryMax ? `£${profile.salaryMin.toLocaleString()} – £${profile.salaryMax.toLocaleString()}` : profile.salaryMin ? `£${profile.salaryMin.toLocaleString()}` : profile.salaryNote;
   await db.applicationAttempt.update({ where: { id: attemptId }, data: { status: "RUNNING" } });
+  // The same vacancy on the employer's or agency's own site, where no
+  // job-board account is needed: the browser tries those routes first.
+  const alternatives = await findAlternativeAdverts(app.job).catch(() => [] as string[]);
   const portals = await db.portalAccount.findMany({ where: { userId: app.userId } });
   const logins = portals.flatMap((p) => {
     try {
@@ -158,7 +162,7 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
     attemptId,
     dryRun: attempt.mode === "PREVIEW",
     logins,
-    job: { url: app.job.url, applyUrl: app.job.applyUrl, title: app.job.title, company: app.job.company },
+    job: { url: app.job.url, applyUrl: app.job.applyUrl, title: app.job.title, company: app.job.company, alternatives },
     applicant: {
       firstName: app.user.firstName,
       lastName: app.user.lastName,

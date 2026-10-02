@@ -6,6 +6,7 @@ import { DRAFT_THRESHOLD, scoreJob, type MatchPreferences } from "./matching";
 import { prepareDraft } from "@/lib/applications";
 import { applyEmailFor, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
 import { onNetlify, sendMail, simpleEmail, siteUrl } from "@/lib/mail";
+import { canonicalUrl, jobFingerprint } from "./dedupe";
 
 // One scan: read every enabled source, store the adverts, read the advert
 // pages that feeds only summarised, score every open advert for each user
@@ -108,19 +109,22 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       }
       jobsFound += found.length;
       const seen = new Date();
-      // What the same source already holds, and what any source holds open
-      // (the same advert often appears on several boards; the first copy wins).
+      // What the same source already holds, and what any source has ever
+      // held: the same advert appears on several boards, in several feeds of
+      // one board, and again when it is re-posted. The first copy wins, so
+      // matches and applications stay with it and nothing is listed twice.
       const mine = new Map((await db.job.findMany({ where: { sourceId: source.id }, select: { id: true, externalId: true } })).map((j) => [j.externalId, j.id]));
-      const elsewhere = new Set(
-        (await db.job.findMany({ where: { closedAt: null, sourceId: { not: source.id } }, select: { title: true, company: true } })).map((j) => `${j.title.trim().toLowerCase()}|${j.company.trim().toLowerCase()}`),
-      );
+      const all = await db.job.findMany({ select: { id: true, url: true, title: true, company: true } });
+      const byUrl = new Map(all.map((j) => [canonicalUrl(j.url), j.id]));
+      const byPrint = new Map(all.filter((j) => j.company && j.company !== "See advert").map((j) => [jobFingerprint(j.title, j.company), j.id]));
       for (const job of found) {
-        const existingId = mine.get(job.externalId);
+        const print = job.company && job.company !== "See advert" ? jobFingerprint(job.title, job.company) : null;
+        const existingId = mine.get(job.externalId) ?? byUrl.get(canonicalUrl(job.url)) ?? (print ? byPrint.get(print) : undefined);
         if (existingId) {
-          await db.job.update({ where: { id: existingId }, data: { lastSeenAt: seen, closedAt: null, salary: job.salary || undefined, url: job.url } });
+          // Seen again (here or on another board): keep the one advert open.
+          await db.job.update({ where: { id: existingId }, data: { lastSeenAt: seen, closedAt: null, salary: job.salary || undefined } });
           continue;
         }
-        if (job.company !== "See advert" && elsewhere.has(`${job.title.trim().toLowerCase()}|${job.company.trim().toLowerCase()}`)) continue;
         const created = await db.job.create({
           data: {
             sourceId: source.id,
@@ -139,6 +143,8 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
           select: { id: true },
         });
         mine.set(job.externalId, created.id);
+        byUrl.set(canonicalUrl(job.url), created.id);
+        if (print) byPrint.set(print, created.id);
         progress.newJobIds.push(created.id);
         jobsNew += 1;
       }

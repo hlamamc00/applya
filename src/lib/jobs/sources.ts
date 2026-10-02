@@ -633,7 +633,7 @@ export function detectApply(html: string, text: string, pageUrl: string): { appl
 }
 
 /** The readable text of a page, favouring its main content. */
-function pageText(html: string) {
+export function pageText(html: string) {
   const main = /<(main|article)[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2] ?? /<body[^>]*>([\s\S]*)<\/body>/i.exec(html)?.[1] ?? html;
   return htmlToText(main.replace(/<(script|style|nav|header|footer|noscript)[^>]*>[\s\S]*?<\/\1>/gi, " ")).slice(0, 20_000);
 }

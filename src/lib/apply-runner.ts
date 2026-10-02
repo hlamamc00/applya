@@ -21,7 +21,7 @@ export interface ApplyPacket {
   attemptId: string;
   /** Fill everything in and stop before submitting. */
   dryRun: boolean;
-  job: { url: string; applyUrl?: string | null; title: string; company: string };
+  job: { url: string; applyUrl?: string | null; title: string; company: string; /** The same vacancy on the employer's or agency's own site, best first. */ alternatives?: string[] };
   applicant: {
     firstName: string;
     lastName: string;
@@ -441,8 +441,28 @@ async function findButton(page: Page, kind: "submit" | "next") {
   return handle.asElement() as ElementHandle<HTMLElement> | null;
 }
 
+/**
+ * Tries each route to the vacancy in turn: the employer's or agency's own
+ * pages first (no job-board account needed), then the advert itself. A route
+ * that ends at a sign-in wall, a CAPTCHA or without a form hands over to the
+ * next; anything decisive (submitted, previewed, needs an answer) is final.
+ */
 export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<ApplyReport> {
+  const advert = packet.job.applyUrl || packet.job.url;
+  const routes = [...new Set([...(packet.job.alternatives ?? []), advert])];
   const log: string[] = [];
+  let last: ApplyReport | null = null;
+  for (const [i, start] of routes.entries()) {
+    if (i > 0) log.push(`Trying another route: ${start}`);
+    const report = await runApplyAt(packet, deps, start, start !== advert, log);
+    const handOver = report.status === "NEEDS_YOU" && /sign in|create an account|CAPTCHA|couldn't find an application form|isn't about this vacancy/i.test(report.detail);
+    if (!handOver || i === routes.length - 1) return { ...report, log };
+    last = report;
+  }
+  return last ? { ...last, log } : { status: "FAILED", detail: "No route to the vacancy.", finalUrl: advert, log };
+}
+
+async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, alternative: boolean, log: string[]): Promise<ApplyReport> {
   const say = (line: string) => {
     log.push(line);
     deps.progress?.(line);
@@ -475,10 +495,16 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
       .filter((name, i, all) => name && !/^select\.{0,3}$/i.test(name) && all.indexOf(name) === i);
 
   try {
-    const start = packet.job.applyUrl || packet.job.url;
     say(`Opening ${start}`);
     await page.goto(start, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
     await sleep(2500);
+    if (alternative) {
+      // Make sure the page found by search is this vacancy before applying on it.
+      const heading = (await page.evaluate(() => `${document.title} ${[...document.querySelectorAll("h1, h2")].slice(0, 3).map((h) => h.textContent).join(" ")}`).catch(() => "")).toLowerCase();
+      const words = packet.job.title.toLowerCase().split(/\s[–—-]\s|\(|,|\|/)[0].replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2);
+      const hits = words.filter((w) => heading.includes(w)).length;
+      if (!words.length || hits / words.length < 0.6) return finish("NEEDS_YOU", `The page at ${new URL(start).hostname} isn't about this vacancy.`);
+    }
 
     // 1. Get to the form: follow Apply links, at most 5 hops.
     let fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];

@@ -6,7 +6,8 @@ import { providerReport } from "@/lib/llm";
 import { isMailConfigured } from "@/lib/mail";
 import { SOURCE_KIND_LABELS, type SourceKind } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
-import { deleteSource, resetAiProviders, toggleSource } from "@/lib/actions/admin";
+import { deleteSource, mergeDuplicates, resetAiProviders, toggleSource } from "@/lib/actions/admin";
+import { duplicateGroups } from "@/lib/jobs/dedupe";
 import { Badge, Button, Card, CardTitle, PageHeader } from "@/components/ui";
 import { SourceForm } from "./source-form";
 import { AdminScanButton } from "./scan-button";
@@ -17,6 +18,7 @@ export const metadata: Metadata = { title: "Admin" };
 export default async function AdminPage({ searchParams }: { searchParams: Promise<{ edit?: string }> }) {
   const { edit } = await searchParams;
   const providers = await providerReport();
+  const dupes = await duplicateGroups();
   const [sources, runs, jobCount, editing] = await Promise.all([
     db.jobSource.findMany({ orderBy: [{ enabled: "desc" }, { name: "asc" }], include: { _count: { select: { jobs: true } } } }),
     db.scanRun.findMany({ orderBy: { startedAt: "desc" }, take: 15 }),
@@ -83,6 +85,30 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 })}
               </ul>
             )}
+          </Card>
+
+          <Card>
+            <CardTitle
+              action={
+                <form action={mergeDuplicates}>
+                  <Button type="submit" variant="secondary" disabled={dupes.length === 0}>
+                    Merge duplicates
+                  </Button>
+                </form>
+              }
+            >
+              Duplicate adverts
+            </CardTitle>
+            <p className="text-sm text-graphite">
+              {dupes.length === 0
+                ? "Every advert is listed once."
+                : `${dupes.length} vacanc${dupes.length === 1 ? "y is" : "ies are"} listed more than once (${dupes.reduce((n, g) => n + g.length - 1, 0)} extra copies). Merging keeps the copy with applications, moves matches to it and removes the rest. New scans fold copies in automatically.`}
+            </p>
+            {dupes.slice(0, 5).map(([keep, ...rest]) => (
+              <p key={keep.id} className="mt-1 text-xs text-graphite">
+                {keep.title} · {keep.company} — {rest.length + 1} copies
+              </p>
+            ))}
           </Card>
 
           <Card>

@@ -64,10 +64,10 @@ interface BraveResult {
   web?: { results?: { url: string; title: string }[] };
 }
 
-async function braveSearch(query: string): Promise<{ url: string; title: string }[]> {
+export async function braveSearch(query: string, options: { freshness?: "pd" | "pw" | "pm" } = {}): Promise<{ url: string; title: string }[]> {
   const key = process.env.BRAVE_SEARCH_API_KEY?.trim();
   if (!key) return [];
-  const res = await fetch(`https://api.search.brave.com/res/v1/web/search?${new URLSearchParams({ q: query, count: "20", country: "GB" })}`, {
+  const res = await fetch(`https://api.search.brave.com/res/v1/web/search?${new URLSearchParams({ q: query, count: "20", country: "GB", ...(options.freshness ? { freshness: options.freshness } : {}) })}`, {
     headers: { accept: "application/json", "x-subscription-token": key },
     signal: AbortSignal.timeout(20_000),
   });

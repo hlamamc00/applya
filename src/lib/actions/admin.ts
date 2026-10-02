@@ -101,3 +101,12 @@ export async function resetAiProviders() {
   await resetProviders();
   revalidatePath("/admin", "layout");
 }
+
+/** Admin → "Merge duplicates": one advert per vacancy, matches kept. */
+export async function mergeDuplicates() {
+  await requireAdmin();
+  const { mergeDuplicateJobs } = await import("@/lib/jobs/dedupe");
+  await mergeDuplicateJobs();
+  revalidatePath("/app", "layout");
+  revalidatePath("/admin", "layout");
+}
