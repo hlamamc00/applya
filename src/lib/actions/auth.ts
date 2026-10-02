@@ -44,10 +44,11 @@ export async function register(_: FormState, formData: FormData): Promise<FormSt
   if (!(await withinLimit("register-ip", await clientIp(), 10, 3600))) return { error: TOO_MANY_ATTEMPTS };
   const existing = await db.user.findUnique({ where: { email: parsed.data.email } });
   if (existing) return { error: "An account with that email already exists. Sign in instead." };
+  const { password, ...details } = parsed.data;
   const user = await db.user.create({
     data: {
-      ...parsed.data,
-      passwordHash: await hashPassword(parsed.data.password),
+      ...details,
+      passwordHash: await hashPassword(password),
       profile: { create: {} },
       preferences: { create: defaultPreferences() },
     },

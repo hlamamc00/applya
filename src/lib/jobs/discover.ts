@@ -153,22 +153,34 @@ function key(c: Candidate) {
 }
 
 /** Tries each candidate for real and saves the ones that return jobs. */
-export async function discoverSources(opts: { field: string; keywords: string[]; where?: string; userId?: string; useWeb: boolean }): Promise<DiscoveryReport> {
+/** Rejects after `ms` so one slow service can't eat the whole budget. */
+function within<T>(ms: number, work: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`took longer than ${Math.round(ms / 1000)}s`)), ms);
+    work.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+/**
+ * A request on Netlify may only run about 26 seconds, so discovery works to a
+ * budget: the searches run side by side, candidates are probed a few at a
+ * time, and whatever wasn't reached is reported for the next press.
+ */
+export async function discoverSources(opts: { field: string; keywords: string[]; where?: string; userId?: string; useWeb: boolean; budgetMs?: number }): Promise<DiscoveryReport> {
+  const started = Date.now();
+  const budget = opts.budgetMs ?? 20_000;
+  const timeLeft = () => budget - (Date.now() - started);
   const report: DiscoveryReport = { added: [], alreadyThere: [], rejected: [], notes: [] };
   const candidates: Candidate[] = [...keywordCandidates(opts.keywords, opts.where)];
   if (opts.useWeb && opts.field.trim()) {
-    try {
-      const fromClaude = await claudeCandidates(opts.field, opts.where ?? "");
-      candidates.push(...fromClaude.candidates);
-      report.notes.push(...fromClaude.notes);
-    } catch (error) {
-      report.notes.push(`Claude web search failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    try {
-      candidates.push(...(await braveCandidates(opts.field)));
-    } catch (error) {
-      report.notes.push(`Brave search failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    const searchBudget = Math.min(12_000, budget * 0.5);
+    const [fromClaude, fromBrave] = await Promise.allSettled([within(searchBudget, claudeCandidates(opts.field, opts.where ?? "")), within(searchBudget, braveCandidates(opts.field))]);
+    if (fromClaude.status === "fulfilled") {
+      candidates.push(...fromClaude.value.candidates);
+      report.notes.push(...fromClaude.value.notes);
+    } else report.notes.push(`Claude web search failed: ${fromClaude.reason instanceof Error ? fromClaude.reason.message : String(fromClaude.reason)}`);
+    if (fromBrave.status === "fulfilled") candidates.push(...fromBrave.value);
+    else report.notes.push(`Brave search failed: ${fromBrave.reason instanceof Error ? fromBrave.reason.message : String(fromBrave.reason)}`);
     if (!process.env.ANTHROPIC_API_KEY?.trim() && !process.env.BRAVE_SEARCH_API_KEY?.trim()) {
       report.notes.push("Web discovery needs BRAVE_SEARCH_API_KEY (free) or ANTHROPIC_API_KEY; only keyword feeds were added.");
     }
@@ -177,30 +189,38 @@ export async function discoverSources(opts: { field: string; keywords: string[];
   const existing = await db.jobSource.findMany({ select: { kind: true, name: true, config: true } });
   const existingKeys = new Set(existing.map((e) => key({ kind: e.kind as SourceKind, name: e.name, config: (e.config ?? {}) as SourceConfig, via: "" })));
   const tried = new Set<string>();
+  const fresh: Candidate[] = [];
   for (const c of candidates) {
     const k = key(c);
     if (tried.has(k)) continue;
     tried.add(k);
-    if (existingKeys.has(k)) {
-      report.alreadyThere.push(c.name);
-      continue;
-    }
-    let count = 0;
-    try {
-      const jobs = await connectors[c.kind](c.config);
-      count = jobs.length;
-    } catch (error) {
-      report.rejected.push({ name: c.name, reason: error instanceof Error ? error.message : String(error) });
-      continue;
-    }
-    if (count === 0 && !BOARD_KINDS.includes(c.kind)) {
-      report.rejected.push({ name: c.name, reason: "returned no adverts" });
-      continue;
-    }
-    const name = (await db.jobSource.findUnique({ where: { kind_name: { kind: c.kind, name: c.name } } })) ? `${c.name} (${c.config.token ?? c.config.query ?? "feed"})` : c.name;
-    await db.jobSource.create({ data: { kind: c.kind, name, config: { ...c.config, auto: true, via: c.via }, createdById: opts.userId ?? null } });
-    existingKeys.add(k);
-    report.added.push({ name, kind: c.kind, jobs: count });
+    if (existingKeys.has(k)) report.alreadyThere.push(c.name);
+    else fresh.push(c);
   }
+  // Probe a few at a time, each given a slice of what's left.
+  let i = 0;
+  while (i < fresh.length && timeLeft() > 3_000) {
+    const batch = fresh.slice(i, i + 5);
+    i += batch.length;
+    const probeMs = Math.max(3_000, Math.min(8_000, timeLeft() - 1_000));
+    const results = await Promise.allSettled(batch.map((c) => within(probeMs, connectors[c.kind](c.config))));
+    for (const [j, c] of batch.entries()) {
+      const r = results[j];
+      if (r.status === "rejected") {
+        report.rejected.push({ name: c.name, reason: r.reason instanceof Error ? r.reason.message : String(r.reason) });
+        continue;
+      }
+      const count = r.value.length;
+      if (count === 0 && !BOARD_KINDS.includes(c.kind)) {
+        report.rejected.push({ name: c.name, reason: "returned no adverts" });
+        continue;
+      }
+      const name = (await db.jobSource.findUnique({ where: { kind_name: { kind: c.kind, name: c.name } } })) ? `${c.name} (${c.config.token ?? c.config.query ?? "feed"})` : c.name;
+      await db.jobSource.create({ data: { kind: c.kind, name, config: { ...c.config, auto: true, via: c.via }, createdById: opts.userId ?? null } });
+      existingKeys.add(key(c));
+      report.added.push({ name, kind: c.kind, jobs: count });
+    }
+  }
+  if (i < fresh.length) report.notes.push(`${fresh.length - i} more candidate${fresh.length - i === 1 ? "" : "s"} weren't checked in time; press Find sources again to carry on.`);
   return report;
 }
