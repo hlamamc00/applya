@@ -8,6 +8,7 @@ import { sendFromUser } from "./user-mail";
 import { isMailConfigured, onNetlify, sendMail, simpleEmail, siteUrl } from "./mail";
 import type { MailAttachment } from "./mail";
 import { fileSafeName } from "./utils";
+import { decrypt } from "./crypto";
 import type { ApplyPacket, FormField, PlannedValue } from "./apply-runner";
 
 // Submitting an approved application: by email from the person's own
@@ -75,20 +76,21 @@ export async function submitByEmail(applicationId: string, to: string, subject?:
 // --- Copies to the applicant ----------------------------------------------------
 
 /**
- * Emails the applicant their own copy (or a notice). Applya's mailer first;
- * failing that, their own connected mailbox writing to itself. Never throws.
+ * Emails the applicant their own copy (or a notice) from Applya's own address
+ * (SMTP_* / MAIL_FROM). Their connected mailbox is only ever used to write to
+ * employers. Never throws.
  */
 async function emailApplicant(userId: string, mail: { subject: string; title: string; paragraphs: string[]; buttonUrl?: string; attachments?: MailAttachment[] }) {
   const user = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
   if (!user) return false;
   const text = `${mail.paragraphs.join("\n\n")}${mail.buttonUrl ? `\n\n${mail.buttonUrl}` : ""}`;
   try {
-    if (isMailConfigured()) {
-      const { html } = simpleEmail({ title: mail.title, paragraphs: mail.paragraphs, button: mail.buttonUrl ? { label: "Open in Applya", url: mail.buttonUrl } : undefined });
-      if (await sendMail({ to: user.email, subject: mail.subject, html, text, attachments: mail.attachments })) return true;
+    if (!isMailConfigured()) {
+      console.warn("[apply] SMTP_* not set, so no copy was emailed to the applicant");
+      return false;
     }
-    await sendFromUser(userId, { to: user.email, subject: mail.subject, text, attachments: mail.attachments });
-    return true;
+    const { html } = simpleEmail({ title: mail.title, paragraphs: mail.paragraphs, button: mail.buttonUrl ? { label: "Open in Applya", url: mail.buttonUrl } : undefined });
+    return await sendMail({ to: user.email, subject: mail.subject, html, text, attachments: mail.attachments });
   } catch (error) {
     console.warn(`[apply] couldn't email the applicant a copy: ${error instanceof Error ? error.message : String(error)}`);
     return false;
@@ -143,10 +145,19 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
   const link = (re: RegExp) => base.links.find((l) => re.test(l.url))?.url ?? "";
   const salary = profile.salaryMin && profile.salaryMax ? `£${profile.salaryMin.toLocaleString()} – £${profile.salaryMax.toLocaleString()}` : profile.salaryMin ? `£${profile.salaryMin.toLocaleString()}` : profile.salaryNote;
   await db.applicationAttempt.update({ where: { id: attemptId }, data: { status: "RUNNING" } });
+  const portals = await db.portalAccount.findMany({ where: { userId: app.userId } });
+  const logins = portals.flatMap((p) => {
+    try {
+      return [{ host: p.host, username: p.username, password: decrypt(p.passwordEnc) }];
+    } catch {
+      return [];
+    }
+  });
   return {
     applicationId,
     attemptId,
     dryRun: attempt.mode === "PREVIEW",
+    logins,
     job: { url: app.job.url, applyUrl: app.job.applyUrl, title: app.job.title, company: app.job.company },
     applicant: {
       firstName: app.user.firstName,
@@ -259,6 +270,11 @@ export async function recordResult(attemptId: string, result: { status: string; 
     data: { status, detail: result.detail.slice(0, 1000), finalUrl: result.finalUrl?.slice(0, 1000) ?? null, log: (result.log ?? []).slice(-60), screenshot, finishedAt: new Date() },
   });
   const app = attempt.application;
+  for (const line of result.log ?? []) {
+    const m = /^(Signed in to|Signing in to) (\S+?)( didn't work)?$/.exec(line);
+    if (!m) continue;
+    await db.portalAccount.updateMany({ where: { userId: app.userId, host: m[2] }, data: { lastUsedAt: new Date(), lastResult: m[3] ? "Sign-in failed last time" : "Signed in" } });
+  }
   if (attempt.mode === "PREVIEW") {
     await db.application.update({ where: { id: app.id }, data: { events: { create: { kind: "PREVIEW", detail: status === "PREVIEWED" ? "Form preview ready" : `Preview: ${result.detail}` } } } });
     return;

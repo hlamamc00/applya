@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { login, type FormState } from "@/lib/actions/auth";
 import { SubmitButton } from "@/components/submit-button";
 import { Field, Notice } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 
 export function LoginForm({ next }: { next?: string }) {
   const [state, action] = useActionState<FormState, FormData>(login, {});
@@ -15,7 +16,7 @@ export function LoginForm({ next }: { next?: string }) {
         <input className="input" type="email" name="email" autoComplete="email" required />
       </Field>
       <Field label="Password">
-        <input className="input" type="password" name="password" autoComplete="current-password" required minLength={1} maxLength={128} />
+        <PasswordInput name="password" autoComplete="current-password" required minLength={1} maxLength={128} />
       </Field>
       {state.error && <Notice tone="red">{state.error}</Notice>}
       <p className="text-xs text-graphite">

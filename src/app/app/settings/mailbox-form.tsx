@@ -5,6 +5,7 @@ import { connectMailbox, disconnectMailbox, sendTestEmail } from "@/lib/actions/
 import type { FormState } from "@/lib/actions/auth";
 import { SubmitButton } from "@/components/submit-button";
 import { Button, Field, Notice } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 
 const presets = [
   { key: "gmail", label: "Gmail / Google Workspace", help: "Turn on 2-step verification, then create an app password at myaccount.google.com/apppasswords and paste it below." },
@@ -126,7 +127,7 @@ export function MailboxForm({ connected, defaultEmail, defaultName, oauth, notic
         </div>
       )}
       <Field label="App password" hint="Not your normal password: an app password from your provider's security settings. Stored encrypted.">
-        <input className="input" type="password" name="password" autoComplete="off" required />
+        <PasswordInput name="password" autoComplete="off" required />
       </Field>
       {state.error && <Notice tone="red">{state.error}</Notice>}
       {state.ok && <Notice tone="green">{state.ok}</Notice>}

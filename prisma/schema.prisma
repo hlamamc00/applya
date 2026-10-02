@@ -39,6 +39,7 @@ model User {
   applications          Application[]
   cvVersions            CvVersion[]
   mailAccount           MailAccount?
+  portalAccounts PortalAccount[]
 }
 
 /// The person's own mailbox, so applications go out from their address:
@@ -317,4 +318,22 @@ model ScanRun {
   matchesNew  Int       @default(0)
   draftsNew   Int       @default(0)
   errors      Json      @default("[]")
+}
+
+/// A login for a job site (Reed, The Actuary Jobs…) so the browser can sign in
+/// when a site insists on an account before applying. The password is
+/// encrypted (AES-256-GCM, key derived from AUTH_SECRET).
+model PortalAccount {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  host        String   // e.g. reed.co.uk
+  username    String
+  passwordEnc String
+  lastUsedAt  DateTime?
+  lastResult  String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, host])
 }

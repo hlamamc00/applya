@@ -7,6 +7,8 @@ import { Card, CardTitle, PageHeader } from "@/components/ui";
 import { PasswordForm } from "./password-form";
 import { MailboxForm } from "./mailbox-form";
 import { oauthConfigured } from "@/lib/mail-oauth";
+import { PORTALS } from "@/lib/portals";
+import { PortalForm } from "./portal-form";
 
 export const metadata: Metadata = { title: "Account" };
 
@@ -22,6 +24,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const user = await requireUser("/app/settings");
   const { mail, email, detail } = await searchParams;
   const mailbox = await db.mailAccount.findUnique({ where: { userId: user.id } });
+  const portals = await db.portalAccount.findMany({ where: { userId: user.id }, orderBy: { host: "asc" } });
   const base = mail ? mailNotices[mail] : null;
   const notice = base ? { ...base, text: `${base.text}${mail === "connected" && email ? ` Applications will be sent from ${email}.` : ""}${detail ? ` ${detail}` : ""}` } : null;
   return (
@@ -37,6 +40,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             oauth={{ google: oauthConfigured("google"), microsoft: oauthConfigured("microsoft") }}
             notice={notice}
           />
+        </Card>
+        <Card className="lg:col-span-2">
+          <CardTitle>Job site logins</CardTitle>
+          <PortalForm logins={portals.map((p) => ({ id: p.id, host: p.host, username: p.username, lastUsedAt: p.lastUsedAt ? formatDateTime(p.lastUsedAt) : null, lastResult: p.lastResult }))} portals={PORTALS} />
         </Card>
         <Card>
           <CardTitle>Sign-in details</CardTitle>

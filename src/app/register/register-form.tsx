@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { register, type FormState } from "@/lib/actions/auth";
 import { SubmitButton } from "@/components/submit-button";
 import { Field, Notice } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 
 export function RegisterForm() {
   const [state, action] = useActionState<FormState, FormData>(register, {});
@@ -22,7 +23,7 @@ export function RegisterForm() {
         <input className="input" type="email" name="email" autoComplete="email" required />
       </Field>
       <Field label="Password" hint="At least 8 characters with a number.">
-        <input className="input" type="password" name="password" autoComplete="new-password" required minLength={8} maxLength={128} />
+        <PasswordInput name="password" autoComplete="new-password" required minLength={8} maxLength={128} />
       </Field>
       {state.error && <Notice tone="red">{state.error}</Notice>}
       <p className="text-xs text-graphite">

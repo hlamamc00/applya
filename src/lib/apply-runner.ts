@@ -36,6 +36,8 @@ export interface ApplyPacket {
     cvFileName: string;
     cvPdfBase64: string;
   };
+  /** Job-site accounts the browser may sign in with when a site insists. */
+  logins?: { host: string; username: string; password: string }[];
 }
 
 export interface FormField {
@@ -127,7 +129,18 @@ const EXTRACT_FIELDS = `(() => {
     return "";
   };
   const context = (el) => { const box = el.closest("fieldset, .field, .form-group, [class*='question'], [class*='field'], li, div"); return box ? text(box).slice(0, 300) : ""; };
-  const controls = [...document.querySelectorAll("input, select, textarea")].filter((el) => !["hidden", "submit", "button", "reset", "image"].includes(el.type) && !el.disabled && !el.readOnly && (visible(el) || el.type === "file"));
+  // Site furniture is not the application: search boxes, job-alert and
+  // newsletter sign-ups, anything in the header, nav, footer or a sidebar.
+  const furniture = (el) => {
+    if (el.closest("header, nav, footer, [role='search'], [role='navigation'], [role='banner'], [role='contentinfo'], [data-applya-ignore]")) return true;
+    const form = el.closest("form");
+    const formSig = form ? [form.id, form.className, form.getAttribute("action") || "", form.getAttribute("name") || "", form.getAttribute("aria-label") || ""].join(" ") : "";
+    if (/search|job-?alert|jobalert|newsletter|subscribe|sign-?up-?alert/i.test(formSig)) return true;
+    const box = el.closest("aside, [class*='alert'], [class*='newsletter'], [class*='subscribe'], [id*='alert'], [id*='newsletter']");
+    if (box && !box.querySelector("input[type='file'], textarea")) return true;
+    return /^e\\.g\\. /i.test(el.placeholder || "") && !el.closest("form")?.querySelector("input[type='file'], textarea");
+  };
+  const controls = [...document.querySelectorAll("input, select, textarea")].filter((el) => !["hidden", "submit", "button", "reset", "image"].includes(el.type) && !el.disabled && !el.readOnly && (visible(el) || el.type === "file") && !furniture(el));
   const out = []; const groups = new Map(); let n = 0;
   for (const el of controls) {
     if (el.closest("[data-applya-ignore]")) continue;
@@ -172,8 +185,64 @@ function looksLikeForm(fields: FormField[]) {
   if (looksLikeLogin(fields)) return false;
   const hasFile = fields.some((f) => f.type === "file");
   const hasEmail = fields.some((f) => f.type === "email" || /e-?mail/i.test(f.label));
-  const hasName = fields.some((f) => /name/i.test(f.label));
-  return hasFile || (hasEmail && hasName && fields.length >= 3);
+  const hasName = fields.some((f) => /\b(first|last|full|your) ?name|surname|forename/i.test(f.label));
+  const hasMore = fields.some((f) => f.tag === "textarea" || f.type === "tel" || /phone|cover|message|letter/i.test(f.label));
+  return hasFile || (hasEmail && hasName && hasMore && fields.length >= 3);
+}
+
+/** Does a stored login belong to the site this page is on? */
+function loginFor(page: Page, logins: ApplyPacket["logins"]) {
+  const host = new URL(page.url()).hostname.toLowerCase();
+  return (logins ?? []).find((l) => {
+    const h = l.host.toLowerCase().replace(/^www\./, "");
+    return host === h || host.endsWith(`.${h}`);
+  });
+}
+
+/** Signs in on an account wall with a stored login. True when the wall went away. */
+async function signIn(page: Page, fields: FormField[], login: { host: string; username: string; password: string }, log: string[]) {
+  const user = fields.find((f) => f.type === "email") ?? fields.find((f) => /e-?mail|user ?name|login|account/i.test(`${f.label} ${f.name} ${f.placeholder}`) && f.type === "text") ?? fields.find((f) => f.type === "text");
+  const pass = fields.find((f) => f.type === "password");
+  if (!user || !pass) return false;
+  log.push(`Signing in to ${login.host} as ${login.username}`);
+  const type = async (f: FormField, value: string) => {
+    const h = await page.$(`[data-applya="${f.id}"]`);
+    if (!h) return;
+    await h.click({ count: 3 }).catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
+    await h.type(value, { delay: 10 });
+  };
+  await type(user, login.username);
+  // Some sites ask for the email first and the password on the next screen.
+  if (!(await page.$(`[data-applya="${pass.id}"]`).then((h) => h?.isVisible()).catch(() => false))) {
+    const go = await findButton(page, "next") ?? await findButton(page, "submit");
+    if (go) {
+      const nav = page.waitForNavigation({ timeout: 8000, waitUntil: "domcontentloaded" }).catch(() => null);
+      await go.click().catch(() => {});
+      await nav;
+      await sleep(1500);
+      const again = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+      const p2 = again.find((f) => f.type === "password");
+      if (!p2) return false;
+      await type(p2, login.password);
+    }
+  } else {
+    await type(pass, login.password);
+  }
+  await tickCaptchaBox(page, log);
+  const button = (await findButton(page, "submit")) ?? (await findButton(page, "next"));
+  const nav = page.waitForNavigation({ timeout: 15_000, waitUntil: "domcontentloaded" }).catch(() => null);
+  if (button) await button.click().catch(() => button.evaluate((e) => e.click()));
+  else await page.keyboard.press("Enter").catch(() => {});
+  await nav;
+  await settle(page);
+  const after = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+  if (looksLikeLogin(after) || (await hasCaptchaChallenge(page))) {
+    log.push(`Signing in to ${login.host} didn't work`);
+    return false;
+  }
+  log.push(`Signed in to ${login.host}`);
+  return true;
 }
 
 /** A sign-in wall: a password box and no way to apply without one. */
@@ -216,6 +285,7 @@ async function hasCaptchaChallenge(page: Page) {
 
 /** Finds the control that leads to the form and clicks it; returns the page that results (a popup or the same page). */
 async function followApplyLink(page: Page, browser: Browser, log: string[], seen: Set<string>): Promise<Page | null> {
+  await dismissCookieBanner(page);
   // A string script rather than a function: bundlers can wrap named inner
   // functions with helpers (__name) that don't exist inside the page.
   const candidate = await page.evaluateHandle(`(() => {
@@ -254,6 +324,7 @@ async function followApplyLink(page: Page, browser: Browser, log: string[], seen
     await sleep(2500);
     return page;
   }
+  const startUrl = page.url();
   const popupPromise = new Promise<Page | null>((resolve) => {
     const timer = setTimeout(() => resolve(null), 6000);
     const onTarget = async (t: Target) => {
@@ -273,6 +344,16 @@ async function followApplyLink(page: Page, browser: Browser, log: string[], seen
   await navPromise;
   const target = popup ?? page;
   await target.bringToFront().catch(() => {});
+  // Slow redirect chains (sign-in services) can take longer than the wait above.
+  if (!popup && page.url() === startUrl) {
+    for (let i = 0; i < 6 && page.url() === startUrl; i += 1) await sleep(1000);
+  }
+  // A real click can land on an overlay; the element's own click() cannot.
+  if (!popup && page.url() === startUrl && !again) {
+    const nav2 = page.waitForNavigation({ timeout: 10_000, waitUntil: "domcontentloaded" }).catch(() => null);
+    await el.evaluate((e) => e.click()).catch(() => {});
+    await nav2;
+  }
   await settle(target);
   return target;
 }
@@ -402,15 +483,31 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
     // 1. Get to the form: follow Apply links, at most 5 hops.
     let fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const followed = new Set<string>();
-    for (let hop = 0; hop < 6 && !looksLikeForm(fields); hop += 1) {
-      if (looksLikeLogin(fields) && hop > 0) break;
+    let signedIn = false;
+    const accountWall = async () => {
+      const login = loginFor(page, packet.logins);
+      if (!login) return finish("NEEDS_YOU", `This site (${new URL(page.url()).hostname}) wants you to sign in or create an account before applying. Add your login for it under Account → Job site logins and try again, or apply there yourself.`);
+      if (signedIn) return finish("NEEDS_YOU", `${login.host} asked to sign in again after signing in; finish the application there yourself.`);
+      return null;
+    };
+    for (let hop = 0; hop < 8 && !looksLikeForm(fields); hop += 1) {
+      if (looksLikeLogin(fields)) {
+        const stop = await accountWall();
+        if (stop) return stop;
+        const login = loginFor(page, packet.logins)!;
+        signedIn = true;
+        if (!(await signIn(page, fields, login, log))) return finish("NEEDS_YOU", `Signing in to ${login.host} as ${login.username} didn't work; check the login under Account → Job site logins.`);
+        fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+        followed.clear();
+        continue;
+      }
       const next = await followApplyLink(page, deps.browser, log, followed);
       if (!next) break;
       page = next;
       await page.setViewport({ width: 1280, height: 1000 }).catch(() => {});
       fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     }
-    if (looksLikeLogin(fields) && !looksLikeForm(fields)) return finish("NEEDS_YOU", "This site wants you to sign in or create an account before applying.");
+    if (looksLikeLogin(fields) && !looksLikeForm(fields)) return (await accountWall()) ?? finish("NEEDS_YOU", "This site wants you to sign in before applying.");
     // No more Apply links, but questions and a Continue button: a multi-step
     // flow that starts with screening questions.
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
@@ -422,7 +519,25 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
     for (let step = 0; step < 10; step += 1) {
       if (step > 0) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
       if (fields.length === 0) break;
-      if (looksLikeLogin(fields)) return finish("NEEDS_YOU", "This site wants you to sign in or create an account to carry on applying.");
+      if (looksLikeLogin(fields)) {
+        const stop = await accountWall();
+        if (stop) return stop;
+        const login = loginFor(page, packet.logins)!;
+        signedIn = true;
+        if (!(await signIn(page, fields, login, log))) return finish("NEEDS_YOU", `Signing in to ${login.host} as ${login.username} didn't work; check the login under Account → Job site logins.`);
+        fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+        if (fields.length === 0) {
+          // Back on the advert after signing in: find the Apply button again.
+          const next = await followApplyLink(page, deps.browser, log, new Set());
+          if (next) { page = next; fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[]; }
+        }
+        if (fields.length === 0) break;
+      }
+      // A site that applies with the CV saved on the account, offering no way to upload ours.
+      const cvChooser = fields.some((f) => f.options.some((o) => /\.(pdf|docx?|rtf)$/i.test(o.label.trim())) || /choose (a |your )?cv|select (a |your )?cv|which cv/i.test(f.label + " " + f.context));
+      if (cvChooser && !fields.some((f) => f.type === "file")) {
+        return finish("NEEDS_YOU", `${new URL(page.url()).hostname} applies with the CV saved on your account there and doesn't let the browser upload this one. Download the tailored CV from this page, upload it on the site, then press Apply there.`);
+      }
       const text = await pageText(page);
       const plan = await deps.plan(fields, text);
       for (const field of fields) {
@@ -456,16 +571,21 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
       await sleep(3000);
       const after = await pageText(page);
       if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site asked for a CAPTCHA after pressing submit.");
-      const success = /thank you|thanks for applying|application (has been |was )?(received|submitted|sent|complete)|we have received|successfully (submitted|applied|sent)|you have applied|application confirmed/i.test(after);
-      if (submit) {
-        if (success) return finish("SUBMITTED", `Submitted: the site confirmed the application${page.url() !== before ? ` (${page.url()})` : ""}.`);
-        const errors = /this field is required|is required|please (fill|enter|select|complete|upload)|invalid|must be|required field|can't be blank/i.test(after) && after !== beforeText;
-        const remaining = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
-        if (errors || looksLikeForm(remaining)) return finish("NEEDS_YOU", "The form came back with validation messages; some answers need you.");
-        return finish("SUBMITTED", "Submitted: the form was accepted (no confirmation text found, so check your inbox).");
+      const success = /thank you for (your )?(applying|application)|thanks for applying|application (has been |was |is )?(received|submitted|sent|complete|successful)|we have received your application|successfully (submitted|applied|sent)|you have (successfully )?applied|application confirmed|your application has gone/i.test(after) && after !== beforeText;
+      // Only the site's own confirmation counts as submitted.
+      if (success) return finish("SUBMITTED", `Submitted: the site confirmed the application${page.url() !== before ? ` (${page.url()})` : ""}.`);
+      const remaining = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+      const errors = /this field is required|is required|please (fill|enter|select|complete|upload|choose|answer)|invalid|must be|required field|can't be blank|cannot be (blank|empty)/i.test(after) && after !== beforeText;
+      const samePlace = after === beforeText && page.url() === before;
+      const sameFields = remaining.length === fields.length && remaining.every((r, i) => r.label === fields[i].label && r.type === fields[i].type);
+      if (samePlace) return finish("NEEDS_YOU", `Pressed "${label}" but the form didn't move on; some answers need you.`);
+      if (sameFields && errors) return finish("NEEDS_YOU", "The form came back with validation messages; some answers need you.");
+      if (remaining.length === 0 || (sameFields && !errors && submit)) {
+        if (submit) return finish("NEEDS_YOU", `Pressed "${label}" but the site didn't confirm that the application was received. Check on the site before relying on it.`);
+        return finish("NEEDS_YOU", `Pressed "${label}" and the form ended without a confirmation; finish it on the site.`);
       }
-      // A "next" step: carry on with the new page's fields.
-      if (after === beforeText && page.url() === before) return finish("NEEDS_YOU", `Pressed "${label}" but the form didn't move on; some answers need you.`);
+      // More questions on the next page: carry on.
+      say(`Next step at ${page.url()} with ${remaining.length} fields`);
     }
     return finish("NEEDS_YOU", "The form has more steps than expected; finish it yourself from the link.");
   } catch (error) {
