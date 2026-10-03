@@ -220,6 +220,27 @@ async function pageText(page: Page) {
   return page.evaluate(() => (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 6000)).catch(() => "");
 }
 
+/**
+ * What a site says after Submit: the text of any open pop-up first, then the
+ * whole page. Boards often redirect to a long results page and append their
+ * "Application sent!" pop-up at the very end of it, past any sensible cut-off.
+ */
+async function confirmationText(page: Page): Promise<{ dialogs: string; body: string }> {
+  // A string script: bundlers wrap named inner functions with helpers that don't exist in the page.
+  return page
+    .evaluate(`(() => {
+      const shown = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0; };
+      const dialogs = [...document.querySelectorAll("dialog, [role='dialog'], [role='alertdialog'], [aria-modal='true'], [class*='modal'], [class*='toast'], [role='alert'], [role='status']")]
+        .filter(shown)
+        .map((d) => d.innerText || d.textContent || "")
+        .join(" ");
+      const body = (document.body && document.body.innerText) || "";
+      return { dialogs: dialogs.replace(/\\s+/g, " ").trim(), body: body.replace(/\\s+/g, " ").slice(0, 400000) };
+    })()`)
+    .then((v) => v as { dialogs: string; body: string })
+    .catch(() => ({ dialogs: "", body: "" }));
+}
+
 async function screenshot(page: Page) {
   try {
     const buf = await page.screenshot({ type: "jpeg", quality: 60, fullPage: true, captureBeyondViewport: true });
@@ -246,6 +267,20 @@ function loginFor(page: Page, logins: ApplyPacket["logins"]) {
     const h = l.host.toLowerCase().replace(/^www\./, "");
     return host === h || host.endsWith(`.${h}`);
   });
+}
+
+/** A login form, including one that asks for the email first. */
+function looksLikeLoginForm(fields: FormField[]) {
+  if (looksLikeLogin(fields)) return true;
+  const visible = fields.filter((f) => f.type !== "hidden" && f.type !== "checkbox");
+  return visible.length >= 1 && visible.length <= 3 && visible.some((f) => f.type === "email" || /e-?mail|user ?name/i.test(`${f.label} ${f.name} ${f.placeholder}`));
+}
+
+/** A "we've noticed unusual behaviour" page that blocks robots until someone logs in. */
+async function isBotWall(page: Page) {
+  return page
+    .evaluate(() => /suspicious (behaviour|behavior|activity)|unusual (behaviour|behavior|activity|traffic)|verify (that )?you are (a )?human|are you a robot|access (has been )?denied|request (has been )?blocked/i.test((document.body?.innerText || "").slice(0, 3000)))
+    .catch(() => false);
 }
 
 /** The "Sign in" / "Log in" button of a login form, by its wording. */
@@ -276,17 +311,22 @@ async function preSignIn(page: Page, start: string, logins: ApplyPacket["logins"
     })()`)
     .catch(() => "")) as string;
   if (!found || found === "in") return false;
-  log.push(`Signing in to ${login.host} first`);
-  if (found === "click") {
-    await page.evaluate(`(() => { const el = [...document.querySelectorAll("a, button, [role='button']")].find((e) => /^(sign in|log in|login)/.test((e.innerText || "").trim().toLowerCase())); if (el) el.click(); })()`).catch(() => {});
-    await page.waitForNavigation({ timeout: 10_000, waitUntil: "domcontentloaded" }).catch(() => null);
-  } else {
-    await page.goto(found, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
-  }
+  const wall = await isBotWall(page);
+  log.push(wall ? `${login.host} stopped the browser ("suspicious behaviour"); signing in to carry on` : `Signing in to ${login.host} first`);
+  // Click it: many sites open the login form as a pop-up on the same page.
+  const before = page.url();
+  const nav = page.waitForNavigation({ timeout: 8_000, waitUntil: "domcontentloaded" }).catch(() => null);
+  await page.evaluate(`(() => { const el = [...document.querySelectorAll("a, button, [role='button']")].filter((e) => e.offsetParent !== null).find((e) => /^(sign in|log in|login)/.test((e.innerText || "").replace(/\\s+/g, " ").trim().toLowerCase())); if (el) el.click(); })()`).catch(() => {});
+  await nav;
   await settle(page);
+  let fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+  if (!looksLikeLoginForm(fields) && found !== "click" && page.url() === before) {
+    await page.goto(found, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
+    await settle(page);
+    fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+  }
   await dismissCookieBanner(page);
-  const fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
-  if (!looksLikeLogin(fields)) {
+  if (!looksLikeLoginForm(fields)) {
     await page.goto(start, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
     await settle(page);
     return false;
@@ -300,11 +340,29 @@ async function preSignIn(page: Page, start: string, logins: ApplyPacket["logins"
 }
 
 /** Signs in on an account wall with a stored login. True when the wall went away. */
-async function signIn(page: Page, fields: FormField[], login: { host: string; username: string; password: string }, log: string[]) {
+async function signIn(page: Page, fieldsIn: FormField[], login: { host: string; username: string; password: string }, log: string[]): Promise<boolean> {
+  let fields = fieldsIn;
   const user = fields.find((f) => f.type === "email") ?? fields.find((f) => /e-?mail|user ?name|login|account/i.test(`${f.label} ${f.name} ${f.placeholder}`) && f.type === "text") ?? fields.find((f) => f.type === "text");
   const pass = fields.find((f) => f.type === "password");
-  if (!user || !pass) return false;
-  log.push(`Signing in to ${login.host} as ${login.username}`);
+  if (!user && !pass) return false;
+  if (user) log.push(`Signing in to ${login.host} as ${login.username}`);
+  if (!pass && user) {
+    // Email first, password on the next screen.
+    const h = await page.$(`[data-applya="${user.id}"]`);
+    if (!h) return false;
+    await h.click({ count: 3 }).catch(() => {});
+    await h.type(login.username, { delay: 10 });
+    const go = (await findLoginButton(page)) ?? (await findButton(page, "next")) ?? (await findButton(page, "submit"));
+    const nav1 = page.waitForNavigation({ timeout: 8000, waitUntil: "domcontentloaded" }).catch(() => null);
+    if (go) await go.click().catch(() => {});
+    else await page.keyboard.press("Enter").catch(() => {});
+    await Promise.race([nav1, sleep(3000)]);
+    await sleep(1000);
+    fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+    if (!fields.some((f) => f.type === "password")) return false;
+    // The password screen: only the password box is left.
+    return signIn(page, fields.filter((f) => f.type === "password"), login, log);
+  }
   const type = async (f: FormField, value: string) => {
     const h = await page.$(`[data-applya="${f.id}"]`);
     if (!h) return;
@@ -312,7 +370,8 @@ async function signIn(page: Page, fields: FormField[], login: { host: string; us
     await page.keyboard.press("Backspace").catch(() => {});
     await h.type(value, { delay: 10 });
   };
-  await type(user, login.username);
+  if (!pass) return false;
+  if (user) await type(user, login.username);
   // Some sites ask for the email first and the password on the next screen.
   if (!(await page.$(`[data-applya="${pass.id}"]`).then((h) => h?.isVisible()).catch(() => false))) {
     const go = await findButton(page, "next") ?? await findButton(page, "submit");
@@ -463,6 +522,8 @@ async function alreadyAppliedNow(page: Page) {
       const handsOver = [...document.querySelectorAll("a, button, [role='button']")].some((el) => /apply on (the )?(external|employer|company|recruiter)('s)? ?(web)?site|visit employer'?s? website|apply on their (web)?site|external site/i.test((el.innerText || "").replace(/\\s+/g, " ")));
       if (handsOver) return "";
       const m = /(you (have )?(already )?applied (for|to) this (job|role|position|vacancy)[^.]{0,60}|you applied for this job[^.]{0,40}|already applied[^.]{0,60}|application (already )?(received|submitted) (on|at) [^.]{0,40}|you've applied[^.]{0,40})/i.exec(text);
+      // "…but subsequently withdrew your application" is not an application.
+      if (m && /withdr(ew|awn)/i.test(text.slice(m.index, m.index + 200))) return "";
       return m ? m[0].trim().slice(0, 140) : "";
     })()`)
     .catch(() => "") as Promise<string>;
@@ -683,7 +744,7 @@ export async function runApply(packet: ApplyPacket, deps: RunnerDeps): Promise<A
   for (const [i, start] of routes.entries()) {
     if (i > 0) log.push(`Trying another route: ${start}`);
     const report = await runApplyAt(packet, deps, start, start !== advert, log);
-    const handOver = report.status === "NEEDS_YOU" && /sign in|create an account|CAPTCHA|couldn't find an application form|isn't about this vacancy/i.test(report.detail);
+    const handOver = report.status === "NEEDS_YOU" && /sign in|create an account|CAPTCHA|couldn't find an application form|isn't about this vacancy|blocked the browser/i.test(report.detail);
     if (!handOver || i === routes.length - 1) return { ...report, log };
     last = report;
   }
@@ -799,6 +860,10 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     if (!looksLikeForm(fields) && !fields.some((f) => f.type === "file") && (await revealCvUpload(page, log))) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
     if (!looksLikeForm(fields) && !stepStart) {
+      if (await isBotWall(page)) {
+        const host = new URL(page.url()).hostname.replace(/^www\./, "");
+        return finish("NEEDS_YOU", loginFor(page, packet.logins) ? `${host} blocked the browser as a robot and signing in didn't get past it.` : `${host} blocked the browser as a robot ("suspicious behaviour"). Add your ${host} login under Account → Job site logins and the browser will sign in and carry on.`);
+      }
       const appliedLate = await alreadyAppliedNote(page, 4000);
       if (appliedLate) return finish("ALREADY_APPLIED", `The site says this account has already applied: "${appliedLate}".`);
       log.push(`What the browser could see: ${await describePage(page)}`);
@@ -882,6 +947,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       const label = await button.evaluate((e) => (e.innerText || (e as HTMLInputElement).value || "").trim());
       const before = page.url();
       const beforeText = await pageText(page);
+      const beforeFull = (await confirmationText(page)).body;
       say(`Pressing "${label}"`);
       const nav = page.waitForNavigation({ timeout: 12_000, waitUntil: "domcontentloaded" }).catch(() => null);
       await button.evaluate((e) => e.scrollIntoView({ block: "center" })).catch(() => {});
@@ -898,7 +964,11 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       for (let wait = 0; wait < 6; wait += 1) {
         await sleep(2500);
         after = await pageText(page);
-        if (SUCCESS.test(after) && after !== beforeText) {
+        const said = await confirmationText(page);
+        // A pop-up that says so is enough; otherwise the page must have changed to say so.
+        if (SUCCESS.test(said.dialogs) || (SUCCESS.test(said.body) && !SUCCESS.test(beforeFull))) {
+          const m = SUCCESS.exec(said.dialogs) ?? SUCCESS.exec(said.body);
+          if (m) log.push(`The site said: "${(said.dialogs || said.body).slice(Math.max(0, (said.dialogs ? said.dialogs : said.body).indexOf(m[0]) - 20), (said.dialogs ? said.dialogs : said.body).indexOf(m[0]) + 140).trim()}"`);
           success = true;
           break;
         }
