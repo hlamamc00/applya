@@ -42,6 +42,7 @@ interface PendingDraft {
 interface Progress {
   onlyUserId?: string;
   keywordSourcesEnsured?: boolean;
+  scored?: boolean;
   fieldsChecked?: boolean;
   sourcesDone: string[];
   newJobIds: string[];
@@ -105,7 +106,9 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       }
       const source = await db.jobSource.findFirst({ where: { enabled: true, id: { notIn: progress.sourcesDone } }, orderBy: { name: "asc" } });
       if (!source) {
-        phase = "ENRICH";
+        // Score on the feeds' summaries first, so matches appear within minutes;
+        // only adverts that matched someone are then read in full.
+        phase = "SCORE";
         await save();
         break;
       }
@@ -190,9 +193,10 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
     // --- ENRICH: read the advert pages feeds only summarised -----------------
     // Each advert page is given 8 seconds, so one is only started with that in hand.
     while (phase === "ENRICH" && timeLeft() > 9_000) {
-      const batch = await db.job.findMany({ where: { enrichedAt: null, closedAt: null }, orderBy: { firstSeenAt: "desc" }, take: 8 });
+      const batch = await db.job.findMany({ where: { enrichedAt: null, closedAt: null, matches: { some: {} } }, orderBy: { firstSeenAt: "desc" }, take: 8 });
       if (batch.length === 0) {
-        phase = "SCORE";
+        // Runs saved by the earlier order (sources → enrich → score) still need scoring.
+        phase = progress.scored ? "DRAFTS" : "SCORE";
         await save();
         break;
       }
@@ -216,7 +220,8 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
         orderBy: { createdAt: "asc" },
       });
       if (!user) {
-        phase = "DRAFTS";
+        progress.scored = true;
+        phase = "ENRICH";
         await save();
         break;
       }
