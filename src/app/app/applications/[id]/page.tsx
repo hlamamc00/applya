@@ -84,7 +84,7 @@ export default async function ApplicationPage({ params, searchParams }: { params
 
           <Card>
             <CardTitle>Cover message</CardTitle>
-            <MessageForm applicationId={app.id} coverMessage={app.coverMessage} notes={app.notes} />
+            <MessageForm key={`${app.updatedAt.toISOString()}:${app.coverMessage.length}`} applicationId={app.id} coverMessage={app.coverMessage} notes={app.notes} />
           </Card>
 
           <Card>

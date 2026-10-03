@@ -71,7 +71,7 @@ export interface PlannedValue {
 }
 
 export interface ApplyReport {
-  status: "SUBMITTED" | "PREVIEWED" | "NEEDS_YOU" | "FAILED";
+  status: "SUBMITTED" | "ALREADY_APPLIED" | "PREVIEWED" | "NEEDS_YOU" | "FAILED";
   detail: string;
   finalUrl: string;
   log: string[];
@@ -444,6 +444,21 @@ async function waitForUploads(page: Page, log: string[]) {
   }
 }
 
+/** What a site says when this account has applied for the vacancy before (Reed: "You applied for this job 1 hr ago"). */
+async function alreadyAppliedNote(page: Page) {
+  return page
+    .evaluate(`(() => {
+      const text = (document.body?.innerText || "").replace(/\\s+/g, " ");
+      // A board that only hands over to the employer's site counts a click as
+      // "applied"; the real application is still to be made there.
+      const handsOver = [...document.querySelectorAll("a, button, [role='button']")].some((el) => /apply on (the )?(external|employer|company|recruiter)('s)? ?(web)?site|visit employer'?s? website|apply on their (web)?site|external site/i.test((el.innerText || "").replace(/\\s+/g, " ")));
+      if (handsOver) return "";
+      const m = /(you (have )?(already )?applied (for|to) this (job|role|position|vacancy)[^.]{0,60}|you applied for this job[^.]{0,40}|already applied[^.]{0,60}|application (already )?(received|submitted) (on|at) [^.]{0,40}|you've applied[^.]{0,40})/i.exec(text);
+      return m ? m[0].trim().slice(0, 140) : "";
+    })()`)
+    .catch(() => "") as Promise<string>;
+}
+
 /** Ticks a reCAPTCHA "I'm not a robot" box; a challenge afterwards is still a stop. */
 async function tickCaptchaBox(page: Page, log: string[]) {
   for (const frame of page.frames()) {
@@ -481,11 +496,13 @@ async function followApplyLink(page: Page, browser: Browser, log: string[], seen
     const score = (el) => {
       const t = text(el).toLowerCase().replace(/\\(this will open in a new (window|tab)[^)]*\\)/g, "").trim();
       if (!t || t.length > 160) return -1;
-      if (/no thanks|apply without|without regist|as a guest|skip (this|registration|and)/.test(t)) return 12;
+      const bonus = el.closest("dialog, [role='dialog'], [aria-modal='true']") ? 10 : 0;
+      if (/no thanks|apply without|without regist|as a guest|skip (this|registration|and)/.test(t)) return 12 + bonus;
       if (/alert|save|share|sign in|log in|register|sign up|create (an )?account|email this|print/.test(t)) return -1;
-      if (/continue to apply/.test(t)) return 10;
-      if (/^apply( now| for this job| online| here)?$/.test(t)) return 8;
-      if (/apply/.test(t)) return 5;
+      if (/apply on (the )?(external|employer|company|recruiter)('s)? ?(web)?site|continue to (the )?(employer|company)|apply on their (web)?site|visit employer'?s? website/.test(t)) return 9 + bonus;
+      if (/continue to apply/.test(t)) return 10 + bonus;
+      if (/^apply( now| for this job| online| here)?$/.test(t)) return 8 + bonus;
+      if (/apply/.test(t)) return 5 + bonus;
       return -1;
     };
     const ranked = all.map((el) => ({ el, s: score(el) })).filter((x) => x.s > 0 && x.el.offsetParent !== null).sort((a, b) => b.s - a.s);
@@ -705,6 +722,8 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
 
     await dismissCookieBanner(page);
     let signedIn = await preSignIn(page, start, packet.logins, log);
+    const applied = await alreadyAppliedNote(page);
+    if (applied) return finish("ALREADY_APPLIED", `The site says this account has already applied: "${applied}".`);
     // 1. Get to the form: follow Apply links, at most 5 hops.
     let fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const followed = new Set<string>();
@@ -742,6 +761,10 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     if (!looksLikeForm(fields) && !stepStart) {
       log.push(`What the browser could see: ${await describePage(page)}`);
       return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
+    }
+    {
+      const appliedNow = await alreadyAppliedNote(page);
+      if (appliedNow) return finish("ALREADY_APPLIED", `The site says this account has already applied: "${appliedNow}".`);
     }
     say(`Found a form with ${fields.length} fields at ${page.url()}`);
     await dismissCookieBanner(page);
@@ -813,10 +836,21 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       await Promise.race([nav, sleep(2500)]);
       if (page.url() === before && (await pageText(page)) === beforeText) await button.evaluate((e) => e.click()).catch(() => {});
       await nav;
-      await sleep(3000);
-      const after = await pageText(page);
-      if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site asked for a CAPTCHA after pressing submit.");
-      const success = /thank you for (your )?(applying|application)|thanks for applying|application (has been |was |is )?(received|submitted|sent|complete|successful)|we have received your application|successfully (submitted|applied|sent)|you have (successfully )?applied|application confirmed|your application has gone/i.test(after) && after !== beforeText;
+      // A confirmation can take a moment (a redirect, then an "Application sent!"
+      // pop-up): keep reading for up to 15 seconds before deciding.
+      const SUCCESS = /thank you for (your )?(applying|application|interest)|thanks for applying|application (has been |was |is )?(received|submitted|sent|complete|successful)|application sent|has been sent to|we have received your application|successfully (submitted|applied|sent)|you have (successfully )?applied|application confirmed|your application has gone|your application is (now )?(with|on its way)/i;
+      let after = await pageText(page);
+      let success = false;
+      for (let wait = 0; wait < 6; wait += 1) {
+        await sleep(2500);
+        after = await pageText(page);
+        if (SUCCESS.test(after) && after !== beforeText) {
+          success = true;
+          break;
+        }
+        if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site asked for a CAPTCHA after pressing submit.");
+        if (/this field is required|is required|please (fill|enter|select|complete|upload|choose|answer)|invalid|required field|can't be blank/i.test(after) && after !== beforeText) break;
+      }
       // Only the site's own confirmation counts as submitted.
       if (success) return finish("SUBMITTED", `Submitted: the site confirmed the application${page.url() !== before ? ` (${page.url()})` : ""}.`);
       const remaining = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];

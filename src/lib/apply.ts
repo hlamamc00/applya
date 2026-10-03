@@ -323,7 +323,7 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
 /** Keeps the browser's report and moves the application on. */
 export async function recordResult(attemptId: string, result: { status: string; detail: string; finalUrl?: string; log?: string[]; screenshotBase64?: string; questions?: { label: string; type: string; options: string[]; context: string }[] }) {
   const attempt = await db.applicationAttempt.findUniqueOrThrow({ where: { id: attemptId }, include: { application: { include: { job: true, user: true } } } });
-  const status = ["SUBMITTED", "PREVIEWED", "NEEDS_YOU", "FAILED"].includes(result.status) ? result.status : "FAILED";
+  const status = ["SUBMITTED", "ALREADY_APPLIED", "PREVIEWED", "NEEDS_YOU", "FAILED"].includes(result.status) ? result.status : "FAILED";
   const screenshot = result.screenshotBase64 ? Buffer.from(result.screenshotBase64.slice(0, 2_000_000), "base64") : undefined;
   await db.applicationAttempt.update({
     where: { id: attemptId },
@@ -340,6 +340,19 @@ export async function recordResult(attemptId: string, result: { status: string; 
     return;
   }
   const link = `${siteUrl()}/app/applications/${app.id}`;
+  if (status === "ALREADY_APPLIED") {
+    // The site remembers an application from this account: record it as
+    // submitted, and point out any other application here for the same vacancy.
+    const { jobFingerprint } = await import("./jobs/dedupe");
+    const print = jobFingerprint(app.job.title, app.job.company);
+    const siblings = (await db.application.findMany({ where: { userId: app.userId, id: { not: app.id }, status: { in: ["SUBMITTED", "INTERVIEW", "OFFER", "REJECTED"] } }, include: { job: { select: { title: true, company: true } } } })).filter((s) => jobFingerprint(s.job.title, s.job.company) === print);
+    const dup = siblings.length ? ` This is the same vacancy as ${siblings.length === 1 ? "another application here" : `${siblings.length} other applications here`} (${siblings.map((s) => `#${s.id.slice(-6)}`).join(", ")}); the adverts were duplicates.` : "";
+    await db.application.update({
+      where: { id: app.id },
+      data: { status: "SUBMITTED", submittedAt: app.submittedAt ?? new Date(), submittedVia: app.submittedVia ?? "FORM", notes: dup ? `${app.notes ? `${app.notes}\n` : ""}Duplicate advert: already applied.`.trim() : app.notes, events: { create: { kind: "SUBMITTED", detail: `${new URL(result.finalUrl || app.job.url).host} says this account already applied for this vacancy. ${result.detail}${dup}` } } },
+    });
+    return;
+  }
   if (status === "SUBMITTED") {
     await db.application.update({
       where: { id: app.id },
