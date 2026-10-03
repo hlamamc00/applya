@@ -7,6 +7,7 @@ import { applyOnSite, approve, sendByEmail, setStatus } from "@/lib/actions/appl
 import type { FormState } from "@/lib/actions/auth";
 import { SubmitButton } from "@/components/submit-button";
 import { Button, Field, Notice } from "@/components/ui";
+import { LiveStatus } from "@/components/live-status";
 
 export interface DecisionProps {
   applicationId: string;
@@ -74,11 +75,14 @@ export function Decision(p: DecisionProps) {
     );
   }
 
+  const working = p.status === "SUBMITTING" || p.latest?.status === "QUEUED" || p.latest?.status === "RUNNING" || Boolean(site.ok) || Boolean(send.ok);
+  const live = <LiveStatus url={`/app/applications/${p.applicationId}/status`} active={working} label="Working on it in the background…" className="mt-2" />;
+
   if (p.status === "SUBMITTING") {
     return (
       <>
-        <Notice tone="blue">Applying on the employer&apos;s site now. This takes a minute or two; refresh to see the result.</Notice>
-        {p.latest?.screenshotUrl && <a href={p.latest.screenshotUrl} target="_blank" rel="noopener noreferrer" className="mt-2 block text-sm underline">Last screenshot</a>}
+        <Notice tone="blue">Applying on the employer&apos;s site now. This takes a minute or two; the result appears here when it&apos;s done.</Notice>
+        {live}
       </>
     );
   }
@@ -146,6 +150,7 @@ export function Decision(p: DecisionProps) {
               <p className="text-sm">Or let the browser fill in and submit the employer&apos;s form.</p>
               {site.error && <Notice tone="red">{site.error}</Notice>}
               {site.ok && <Notice tone="green">{site.ok}</Notice>}
+              {live}
               <div className="grid gap-2">
                 <form action={siteAction}>
                   <input type="hidden" name="id" value={p.applicationId} />

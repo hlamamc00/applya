@@ -109,7 +109,7 @@ export async function startSiteApply(applicationId: string, mode: "LIVE" | "PREV
   const app = await db.application.findUniqueOrThrow({ where: { id: applicationId }, include: { job: true } });
   await approvedCv(app);
   const running = await db.applicationAttempt.findFirst({ where: { applicationId, kind: "FORM", status: { in: ["QUEUED", "RUNNING"] }, startedAt: { gt: new Date(Date.now() - 20 * 60_000) } } });
-  if (running) return { ok: false as const, message: "A browser is already working on this application; refresh in a minute." };
+  if (running) return { ok: false as const, message: "A browser is already working on this application; the result appears here when it's done." };
   const attempt = await db.applicationAttempt.create({ data: { applicationId, kind: "FORM", mode, status: "QUEUED" } });
   if (mode === "LIVE") {
     await db.application.update({ where: { id: applicationId }, data: { status: "SUBMITTING", events: { create: { kind: "SUBMITTING", detail: `Applying on ${new URL(app.job.applyUrl || app.job.url).host} in the background` } } } });
@@ -124,12 +124,12 @@ export async function startSiteApply(applicationId: string, mode: "LIVE" | "PREV
       await recordResult(attempt.id, { status: "FAILED", detail: `The browser function couldn't be started (${res.status}).`, log: [], finalUrl: "" });
       return { ok: false as const, message: `The browser couldn't be started (${res.status}).` };
     }
-    return { ok: true as const, attemptId: attempt.id, message: mode === "LIVE" ? "Applying now. The browser is filling in the form; refresh this page in a minute or two to see the result." : "Filling in the form in the background; refresh in a minute to see the preview." };
+    return { ok: true as const, attemptId: attempt.id, message: mode === "LIVE" ? "Applying now. The browser is filling in the form; the result appears here when it's done." : "Filling in the form in the background; the preview appears here when it's ready." };
   }
   // Development: run in this process with a local Chromium.
   const { runLocally } = await import("./apply-local");
   void runLocally(applicationId, attempt.id).catch((error) => console.error("[apply] local run failed", error));
-  return { ok: true as const, attemptId: attempt.id, message: "Running in a local browser; refresh in a minute." };
+  return { ok: true as const, attemptId: attempt.id, message: "Running in a local browser; the result appears here when it's done." };
 }
 
 /** Everything the browser needs for one attempt. */

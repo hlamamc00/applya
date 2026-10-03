@@ -326,7 +326,7 @@ export async function startScan(trigger: "MANUAL" | "SCHEDULED", options: { only
     const internal = process.env.SITE_NAME ? `https://${process.env.SITE_NAME}.netlify.app` : siteUrl();
     const res = await fetch(`${internal}/.netlify/functions/scan-background${params}`, { method: "POST", headers: { authorization: `Bearer ${process.env.CRON_SECRET}`, "x-trigger": trigger } });
     if (res.status !== 202 && !res.ok) return { started: false, message: `The scan couldn't be started (${res.status}).` };
-    return { started: true, message: "Scan started. It runs in the background for a few minutes; refresh this page to see new matches and drafts as they arrive." };
+    return { started: true, message: "Scan started. It runs in the background for a few minutes; new matches and drafts appear here as soon as it finishes." };
   }
   const summary = await runScan(trigger, options);
   const errors = summary.errors.length ? ` ${summary.errors.length} source${summary.errors.length === 1 ? "" : "s"} couldn't be read.` : "";
