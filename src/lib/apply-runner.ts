@@ -298,13 +298,12 @@ async function revealCvUpload(page: Page, log: string[]) {
       if (/^(BUTTON|A|LABEL|INPUT)$/.test(el.tagName) || el.getAttribute("role")) return true;
       return getComputedStyle(el).cursor === "pointer" && !el.querySelector("button, a, input, [role='button']");
     });
+    // "Update" beside the CV on record: the file name is somewhere in the
+    // same pop-up (or the same block of the page), not necessarily next door.
     const nearCvFile = (el) => {
-      let node = el;
-      for (let i = 0; i < 4 && node; i += 1) {
-        if (/\\.(pdf|docx?|rtf)\\b/i.test(node.textContent || "")) return true;
-        node = node.parentElement;
-      }
-      return false;
+      const box = el.closest("dialog, [role='dialog'], [aria-modal='true'], form, section, article, main") || document.body;
+      // No word boundary after the extension: text runs together ("CV.pdfUpdate").
+      return /\\.(pdf|docx?|rtf)/i.test(box.textContent || "") || /\\b(cv|resume)\\b/i.test((el.closest("div, li, tr, p") || el).textContent || "");
     };
     const hit = els.find((el) => {
       const t = text(el);
