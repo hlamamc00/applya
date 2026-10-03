@@ -217,11 +217,10 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       };
       const existingMatches = new Map((await db.match.findMany({ where: { userId: user.id } })).map((m) => [m.jobId, m]));
       const applied = new Set((await db.application.findMany({ where: { userId: user.id }, select: { jobId: true } })).map((a) => a.jobId));
-      // New adverts for everyone; every open advert for the person who pressed
-      // "scan now" (or has no matches yet), so changed preferences take effect.
-      const rescoreAll = progress.onlyUserId === user.id || existingMatches.size === 0;
+      // Every open advert, every time: preferences change (a new ruled-out
+      // word, say) and must take effect on existing matches, not only new adverts.
       const jobs = await db.job.findMany({
-        where: rescoreAll ? { closedAt: null } : { id: { in: progress.newJobIds } },
+        where: { closedAt: null },
         select: { id: true, title: true, description: true, location: true, remote: true, company: true },
       });
       const toCreate: { userId: string; jobId: string; score: number; reasons: string[] }[] = [];
@@ -231,7 +230,8 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
         const result = scoreJob(job, prefs);
         const existing = existingMatches.get(job.id);
         if (result.excluded || result.score < user.preferences.minScore) {
-          if (existing && existing.status === "NEW") toDelete.push(existing.id);
+          // A ruled-out advert goes whatever its state, unless an application exists for it.
+          if (existing && (result.excluded ? !applied.has(job.id) : existing.status === "NEW")) toDelete.push(existing.id);
           continue;
         }
         if (existing) {
@@ -347,4 +347,40 @@ export async function startScan(trigger: "MANUAL" | "SCHEDULED", options: { only
   const summary = await runScan(trigger, options);
   const errors = summary.errors.length ? ` ${summary.errors.length} source${summary.errors.length === 1 ? "" : "s"} couldn't be read.` : "";
   return { started: true, summary, message: `Scan finished: ${summary.jobsFound} adverts read, ${summary.jobsNew} new, ${summary.matchesNew} new matches, ${summary.draftsNew} drafts prepared.${errors}` };
+}
+
+/**
+ * Re-scores one person's matches against their current preferences right
+ * away (used when preferences are saved): ruled-out adverts disappear, new
+ * fits appear. Drafts are left to the next scan.
+ */
+export async function rescoreMatches(userId: string) {
+  const user = await db.user.findUnique({ where: { id: userId }, include: { preferences: true } });
+  if (!user?.preferences) return { removed: 0, added: 0 };
+  const prefs: MatchPreferences = {
+    keywords: strings(user.preferences.keywords),
+    excludeKeywords: strings(user.preferences.excludeKeywords),
+    locations: strings(user.preferences.locations),
+    levels: strings(user.preferences.levels),
+    areas: strings(user.preferences.areas),
+  };
+  const existing = new Map((await db.match.findMany({ where: { userId } })).map((m) => [m.jobId, m]));
+  const applied = new Set((await db.application.findMany({ where: { userId }, select: { jobId: true } })).map((a) => a.jobId));
+  const jobs = await db.job.findMany({ where: { closedAt: null }, select: { id: true, title: true, description: true, location: true, remote: true, company: true } });
+  const toDelete: string[] = [];
+  const toCreate: { userId: string; jobId: string; score: number; reasons: string[] }[] = [];
+  for (const job of jobs) {
+    const result = scoreJob(job, prefs);
+    const match = existing.get(job.id);
+    if (result.excluded || result.score < user.preferences.minScore) {
+      if (match && (result.excluded ? !applied.has(job.id) : match.status === "NEW")) toDelete.push(match.id);
+      continue;
+    }
+    if (match) {
+      if (match.score !== result.score) await db.match.update({ where: { id: match.id }, data: { score: result.score, reasons: result.reasons } });
+    } else toCreate.push({ userId, jobId: job.id, score: result.score, reasons: result.reasons });
+  }
+  if (toDelete.length) await db.match.deleteMany({ where: { id: { in: toDelete } } });
+  if (toCreate.length) await db.match.createMany({ data: toCreate, skipDuplicates: true });
+  return { removed: toDelete.length, added: toCreate.length };
 }

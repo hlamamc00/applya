@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { JOB_LEVELS } from "@/lib/types";
 import { int, list, str } from "@/lib/utils";
 import { discoverSources, normaliseField, queueFieldDiscovery } from "@/lib/jobs/discover";
-import { startScan } from "@/lib/jobs/scan";
+import { rescoreMatches, startScan } from "@/lib/jobs/scan";
 import type { FormState } from "./auth";
 
 export async function savePreferences(_: FormState, formData: FormData): Promise<FormState> {
@@ -28,6 +28,8 @@ export async function savePreferences(_: FormState, formData: FormData): Promise
     reviewEmails: formData.get("reviewEmails") === "on",
   };
   await db.preference.upsert({ where: { userId: user.id }, create: { userId: user.id, ...data }, update: data });
+  // Ruled-out words and thresholds apply to existing matches straight away.
+  const rescored = await rescoreMatches(user.id).catch(() => ({ removed: 0, added: 0 }));
   revalidatePath("/app", "layout");
   // A field nobody has asked for before: find sources for it now, in the background.
   const queued = normaliseField(field) ? await queueFieldDiscovery(field, user.id) : false;
@@ -35,7 +37,8 @@ export async function savePreferences(_: FormState, formData: FormData): Promise
     const scan = await startScan("MANUAL", { onlyUserId: user.id }).catch(() => null);
     return { ok: `Preferences saved. "${field}" is new to Applya, so it is now searching the web for job boards and employers in that field${scan?.started ? " and scanning them" : ""}; matches appear under Matches as they arrive.` };
   }
-  return { ok: "Preferences saved. The next scan will use them." };
+  const changes = rescored.removed || rescored.added ? ` Matches updated: ${rescored.removed} removed, ${rescored.added} added.` : "";
+  return { ok: `Preferences saved.${changes} The next scan will use them.` };
 }
 
 /** Adds sources for the user's own keywords: keyword feeds now, web discovery when keys allow. */
