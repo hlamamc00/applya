@@ -291,8 +291,13 @@ async function dismissCookieBanner(page: Page) {
  */
 async function revealCvUpload(page: Page, log: string[]) {
   const clicked = await page.evaluate(`(() => {
-    const els = [...document.querySelectorAll("button, a, label, [role='button'], [role='tab']")];
-    const text = (el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    const text = (el) => (el.innerText || el.value || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    // Anything that acts as a button, whatever it is made of: a styled span
+    // or div with a pointer cursor counts, as long as it is the innermost one.
+    const els = [...document.querySelectorAll("button, a, label, input[type='button'], input[type='submit'], [role='button'], [role='link'], [role='tab'], span, div, p")].filter((el) => {
+      if (/^(BUTTON|A|LABEL|INPUT)$/.test(el.tagName) || el.getAttribute("role")) return true;
+      return getComputedStyle(el).cursor === "pointer" && !el.querySelector("button, a, input, [role='button']");
+    });
     const nearCvFile = (el) => {
       let node = el;
       for (let i = 0; i < 4 && node; i += 1) {
@@ -325,12 +330,17 @@ async function describePage(page: Page) {
     .evaluate(`(() => {
       const text = (el) => (el.innerText || el.textContent || el.value || "").replace(/\\s+/g, " ").trim().slice(0, 40);
       const shown = (el) => el.offsetParent !== null || getComputedStyle(el).position === "fixed";
-      const clickable = [...document.querySelectorAll("button, a, [role='button'], label, input[type='file']")].filter(shown).map((el) => el.tagName.toLowerCase() + ":" + text(el)).filter((s) => s.length > 3);
+      const inDialog = (el) => Boolean(el.closest("dialog, [role='dialog'], [aria-modal='true']"));
+      const pointer = (el) => getComputedStyle(el).cursor === "pointer" && !el.querySelector("button, a, input");
+      const clickable = [...document.querySelectorAll("button, a, [role='button'], [role='link'], label, input[type='file'], input[type='submit'], input[type='button'], span, div, p")]
+        .filter((el) => shown(el) && (/^(BUTTON|A|LABEL|INPUT)$/.test(el.tagName) || el.getAttribute("role") || pointer(el)))
+        .sort((a, b) => Number(inDialog(b)) - Number(inDialog(a)))
+        .map((el) => (inDialog(el) ? "*" : "") + el.tagName.toLowerCase() + ":" + text(el)).filter((s) => s.length > 3);
       const inputs = [...document.querySelectorAll("input, select, textarea")].map((el) => el.tagName.toLowerCase() + "/" + (el.type || "") + "/" + (el.name || el.id || "") + (shown(el) ? "" : "(hidden)"));
       const frames = [...document.querySelectorAll("iframe")].map((f) => f.src.slice(0, 80));
       const shadows = [...document.querySelectorAll("*")].filter((el) => el.shadowRoot).map((el) => el.tagName.toLowerCase());
       const dialogs = [...document.querySelectorAll("dialog, [role='dialog'], [aria-modal='true']")].map((d) => d.tagName.toLowerCase() + ":" + text(d));
-      return "dialogs=" + JSON.stringify(dialogs.slice(0, 5)) + " clickable=" + JSON.stringify(clickable.slice(0, 40)) + " inputs=" + JSON.stringify(inputs.slice(0, 30)) + " iframes=" + JSON.stringify(frames.slice(0, 10)) + " shadow=" + JSON.stringify(shadows.slice(0, 10));
+      return "dialogs=" + JSON.stringify(dialogs.slice(0, 5)) + " clickable=" + JSON.stringify(clickable.slice(0, 60)) + " inputs=" + JSON.stringify(inputs.slice(0, 30)) + " iframes=" + JSON.stringify(frames.slice(0, 10)) + " shadow=" + JSON.stringify(shadows.slice(0, 10));
     })()`)
     .then((s) => String(s).slice(0, 3000))
     .catch((e) => `unavailable: ${e instanceof Error ? e.message : String(e)}`);
@@ -508,8 +518,12 @@ async function findButton(page: Page, kind: "submit" | "next") {
   const re = kind === "submit" ? "/^(submit|submit application|send application|apply|apply now|send|complete application|finish|submit my application)$|submit/" : "/^(next|continue|next step|save and continue|proceed)$|^next\\b|continue/";
   const handle = await page.evaluateHandle(`(() => {
     const text = (el) => (el.innerText || el.value || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim().toLowerCase();
-    const all = [...document.querySelectorAll("button, input[type=submit], a[role=button], [role=button]")];
-    const visible = (el) => el.offsetParent !== null && !el.disabled;
+    const all = [...document.querySelectorAll("button, input[type=submit], input[type=button], a, [role=button], [role=link], span, div")].filter((el) => {
+      if (/^(BUTTON|INPUT)$/.test(el.tagName) || el.getAttribute("role") === "button") return true;
+      // Links and styled elements only when they look like a button and are the innermost such thing.
+      return getComputedStyle(el).cursor === "pointer" && !el.querySelector("button, a, input, [role=button]") && text(el).length < 40;
+    });
+    const visible = (el) => (el.offsetParent !== null || getComputedStyle(el).position === "fixed") && !el.disabled;
     const re = ${re};
     const ok = all.filter((el) => visible(el) && re.test(text(el)) && !/cancel|back|previous|sign in|log in/.test(text(el)));
     // The most specific wording wins: "submit application" over a page's own "apply now".
