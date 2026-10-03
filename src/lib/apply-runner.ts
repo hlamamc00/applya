@@ -445,7 +445,16 @@ async function waitForUploads(page: Page, log: string[]) {
 }
 
 /** What a site says when this account has applied for the vacancy before (Reed: "You applied for this job 1 hr ago"). */
-async function alreadyAppliedNote(page: Page) {
+async function alreadyAppliedNote(page: Page, waitMs = 6000) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const note = await alreadyAppliedNow(page);
+    if (note || Date.now() >= deadline) return note;
+    await sleep(1500);
+  }
+}
+
+async function alreadyAppliedNow(page: Page) {
   return page
     .evaluate(`(() => {
       const text = (document.body?.innerText || "").replace(/\\s+/g, " ");
@@ -755,7 +764,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
         continue;
       }
       // A board whose session timed out: reload once and try the Apply button again.
-      if (!sessionReloaded && (await page.evaluate(() => /session (has )?expired/i.test([...document.querySelectorAll("dialog, [role='dialog'], [aria-modal='true']")].map((d) => d.textContent || "").join(" "))).catch(() => false))) {
+      if (!sessionReloaded && (await page.evaluate(() => [...document.querySelectorAll("dialog, [role='dialog'], [aria-modal='true']")].some((d) => /session (has )?expired/i.test(d.textContent || "") && getComputedStyle(d).display !== "none" && getComputedStyle(d).visibility !== "hidden" && d.getBoundingClientRect().height > 0)).catch(() => false))) {
         sessionReloaded = true;
         log.push("The site said the session had expired; reloading");
         await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
@@ -790,6 +799,8 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     if (!looksLikeForm(fields) && !fields.some((f) => f.type === "file") && (await revealCvUpload(page, log))) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
     if (!looksLikeForm(fields) && !stepStart) {
+      const appliedLate = await alreadyAppliedNote(page, 4000);
+      if (appliedLate) return finish("ALREADY_APPLIED", `The site says this account has already applied: "${appliedLate}".`);
       log.push(`What the browser could see: ${await describePage(page)}`);
       return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
     }
