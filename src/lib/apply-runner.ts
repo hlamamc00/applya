@@ -319,6 +319,23 @@ async function revealCvUpload(page: Page, log: string[]) {
   return false;
 }
 
+/** A short inventory of a page's clickable things, inputs, frames and shadow roots, for the log when nothing fits. */
+async function describePage(page: Page) {
+  return page
+    .evaluate(`(() => {
+      const text = (el) => (el.innerText || el.textContent || el.value || "").replace(/\\s+/g, " ").trim().slice(0, 40);
+      const shown = (el) => el.offsetParent !== null || getComputedStyle(el).position === "fixed";
+      const clickable = [...document.querySelectorAll("button, a, [role='button'], label, input[type='file']")].filter(shown).map((el) => el.tagName.toLowerCase() + ":" + text(el)).filter((s) => s.length > 3);
+      const inputs = [...document.querySelectorAll("input, select, textarea")].map((el) => el.tagName.toLowerCase() + "/" + (el.type || "") + "/" + (el.name || el.id || "") + (shown(el) ? "" : "(hidden)"));
+      const frames = [...document.querySelectorAll("iframe")].map((f) => f.src.slice(0, 80));
+      const shadows = [...document.querySelectorAll("*")].filter((el) => el.shadowRoot).map((el) => el.tagName.toLowerCase());
+      const dialogs = [...document.querySelectorAll("dialog, [role='dialog'], [aria-modal='true']")].map((d) => d.tagName.toLowerCase() + ":" + text(d));
+      return "dialogs=" + JSON.stringify(dialogs.slice(0, 5)) + " clickable=" + JSON.stringify(clickable.slice(0, 40)) + " inputs=" + JSON.stringify(inputs.slice(0, 30)) + " iframes=" + JSON.stringify(frames.slice(0, 10)) + " shadow=" + JSON.stringify(shadows.slice(0, 10));
+    })()`)
+    .then((s) => String(s).slice(0, 3000))
+    .catch((e) => `unavailable: ${e instanceof Error ? e.message : String(e)}`);
+}
+
 /** Ticks a reCAPTCHA "I'm not a robot" box; a challenge afterwards is still a stop. */
 async function tickCaptchaBox(page: Page, log: string[]) {
   for (const frame of page.frames()) {
@@ -603,7 +620,10 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     await dismissCookieBanner(page);
     if (!looksLikeForm(fields) && !fields.some((f) => f.type === "file") && (await revealCvUpload(page, log))) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
-    if (!looksLikeForm(fields) && !stepStart) return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
+    if (!looksLikeForm(fields) && !stepStart) {
+      log.push(`What the browser could see: ${await describePage(page)}`);
+      return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
+    }
     say(`Found a form with ${fields.length} fields at ${page.url()}`);
     await dismissCookieBanner(page);
 
