@@ -447,10 +447,12 @@ async function linkedin(config: SourceConfig): Promise<FoundJob[]> {
   const days = config.days ?? 7;
   const jobs: FoundJob[] = [];
   const seen = new Set<string>();
-  for (let start = 0; start < 25 * (config.pages ?? 3); start += 25) {
+  for (let start = 0; start < 25 * (config.pages ?? 2); start += 25) {
     const params = new URLSearchParams({ keywords: query, location: config.where || "United Kingdom", f_TPR: `r${Math.max(1, days) * 86_400}`, start: String(start) });
-    const res = await fetch(`https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`, { headers: { "user-agent": BROWSER_UA, accept: "text/html" }, signal: AbortSignal.timeout(12_000) });
+    const res = await fetch(`https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`, { headers: { "user-agent": BROWSER_UA, accept: "text/html" }, signal: AbortSignal.timeout(8_000) });
     if (res.status === 400 || res.status === 404) break;
+    // LinkedIn rate-limits bursts: keep what the first page gave rather than fail the source.
+    if (res.status === 429 && jobs.length) break;
     if (!res.ok) throw new Error(`LinkedIn answered ${res.status}`);
     const html = await res.text();
     const cards = html.split(/<li\b[^>]*>/).slice(1);

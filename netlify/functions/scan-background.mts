@@ -17,11 +17,27 @@ const handler = async (request: Request) => {
   const stepUrl = `${site}/api/scan${user ? `?user=${encodeURIComponent(user)}` : ""}`;
   const stop = Date.now() + 14 * 60_000;
 
+  let failures = 0;
   for (let step = 1; Date.now() < stop; step += 1) {
-    const res = await fetch(stepUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "x-trigger": trigger } });
-    const text = await res.text();
+    let res: Response;
+    let text: string;
+    try {
+      res = await fetch(stepUrl, { method: "POST", headers: { authorization: `Bearer ${secret}`, "x-trigger": trigger }, signal: AbortSignal.timeout(40_000) });
+      text = await res.text();
+    } catch (error) {
+      console.log(`[scan] step ${step} failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (++failures >= 3) break;
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
     console.log(`[scan] step ${step}: ${res.status} ${text.slice(0, 300)}`);
-    if (!res.ok) break;
+    // A step cut off by the request limit leaves the run's progress saved; carry on from it.
+    if (!res.ok) {
+      if (++failures >= 3) break;
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
+    failures = 0;
     let done = true;
     try {
       done = (JSON.parse(text) as { done?: boolean }).done !== false;

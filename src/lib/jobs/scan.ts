@@ -115,7 +115,13 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       }
       let found: FoundJob[];
       try {
-        found = await connector((source.config ?? {}) as SourceConfig);
+        // One source may not eat the whole step: a request on Netlify dies at
+        // ~26 seconds, taking the scan with it. A slow source waits for next time.
+        const cap = Math.max(5_000, Math.min(timeLeft() - 2_500, 18_000));
+        found = await Promise.race([
+          connector((source.config ?? {}) as SourceConfig),
+          new Promise<FoundJob[]>((_, reject) => setTimeout(() => reject(new Error(`took longer than ${Math.round(cap / 1000)}s; it will be read next time`)), cap)),
+        ]);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`${source.name}: ${message}`);
