@@ -166,7 +166,7 @@ export async function setStatus(formData: FormData) {
     REJECTED: "Marked as rejected",
     INTERVIEW: "Interview arranged",
     OFFER: "Offer received",
-    IN_REVIEW: "Approval removed; back in review",
+    IN_REVIEW: app.status === "WITHDRAWN" ? "Reopened after withdrawal; back in review" : "Approval removed; back in review",
     NEEDS_YOU: "Needs you",
     SUBMITTING: "Applying",
     DRAFT: "Back to draft",

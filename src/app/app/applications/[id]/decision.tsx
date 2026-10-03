@@ -206,6 +206,16 @@ export function Decision(p: DecisionProps) {
         </a>
       )}
       <div className="mt-3 grid gap-2">
+        {p.status === "WITHDRAWN" && (
+          <form action={setStatus}>
+            <input type="hidden" name="id" value={p.applicationId} />
+            <input type="hidden" name="status" value="IN_REVIEW" />
+            <SubmitButton variant="green" className="w-full" pending="Reopening…">
+              Re-apply: reopen for review
+            </SubmitButton>
+          </form>
+        )}
+        {p.status === "WITHDRAWN" && <p className="text-xs text-graphite">Reopening puts the application back in review with its CV and message as they were; approve it again to send or apply.</p>}
         {(["INTERVIEW", "OFFER", "REJECTED"] as const)
           .filter((s) => s !== p.status && p.status !== "WITHDRAWN")
           .map((s) => (
