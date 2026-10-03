@@ -272,6 +272,29 @@ async function dismissCookieBanner(page: Page) {
   if (clicked) await sleep(800);
 }
 
+/**
+ * Job boards with saved profiles (Reed's apply pop-up, say) show the CV on
+ * file with an "Update CV" / "Upload a new CV" control that reveals the file
+ * input. Press it so our tailored CV goes in instead of the saved one.
+ */
+async function revealCvUpload(page: Page, log: string[]) {
+  const clicked = await page.evaluate(`(() => {
+    const els = [...document.querySelectorAll("button, a, label, [role='button'], [role='tab']")];
+    const hit = els.find((el) => {
+      const t = (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      return t.length < 60 && /^(update|upload|replace|change|add|use)( a| my| your)?( new| different| another)?( cv| resume|résumé)/.test(t) || /^(upload|update) (cv|resume)/.test(t) || /upload (a )?(new )?(cv|resume)/.test(t) || /^update cv$/.test(t);
+    });
+    if (hit && hit.offsetParent !== null) { hit.click(); return (hit.innerText || hit.textContent || "").trim(); }
+    return "";
+  })()`).catch(() => "");
+  if (clicked) {
+    log.push(`Pressed "${clicked}" to upload the CV`);
+    await sleep(1500);
+    return true;
+  }
+  return false;
+}
+
 /** Ticks a reCAPTCHA "I'm not a robot" box; a challenge afterwards is still a stop. */
 async function tickCaptchaBox(page: Page, log: string[]) {
   for (const frame of page.frames()) {
@@ -548,6 +571,9 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     if (looksLikeLogin(fields) && !looksLikeForm(fields)) return (await accountWall()) ?? finish("NEEDS_YOU", "This site wants you to sign in before applying.");
     // No more Apply links, but questions and a Continue button: a multi-step
     // flow that starts with screening questions.
+    // A pop-up that only shows the saved CV and a Submit button has no
+    // fields yet: its "Update CV" control reveals the file input.
+    if (!looksLikeForm(fields) && !fields.some((f) => f.type === "file") && (await revealCvUpload(page, log))) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
     if (!looksLikeForm(fields) && !stepStart) return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
     say(`Found a form with ${fields.length} fields at ${page.url()}`);
@@ -571,8 +597,12 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
         }
         if (fields.length === 0) break;
       }
-      // A site that applies with the CV saved on the account, offering no way to upload ours.
-      const cvChooser = fields.some((f) => f.options.some((o) => /\.(pdf|docx?|rtf)$/i.test(o.label.trim())) || /choose (a |your )?cv|select (a |your )?cv|which cv/i.test(f.label + " " + f.context));
+      // A site that applies with the CV saved on the account: press its
+      // "Update CV" so our file input appears, else it has to be done by hand.
+      const cvChooser = fields.some((f) => f.options.some((o) => /\.(pdf|docx?|rtf)$/i.test(o.label.trim())) || /choose (a |your )?cv|select (a |your )?cv|which cv|your cv on file|saved cv/i.test(f.label + " " + f.context));
+      if (!fields.some((f) => f.type === "file") && (await revealCvUpload(page, log))) {
+        fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+      }
       if (cvChooser && !fields.some((f) => f.type === "file")) {
         return finish("NEEDS_YOU", `${new URL(page.url()).hostname} applies with the CV saved on your account there and doesn't let the browser upload this one. Download the tailored CV from this page, upload it on the site, then press Apply there.`);
       }
