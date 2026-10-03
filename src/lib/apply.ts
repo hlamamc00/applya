@@ -174,6 +174,7 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
       linkedin: link(/linkedin/i),
       website: link(/^(?!.*linkedin)/i),
       summary: cv.summary,
+      headline: cv.headline || cv.experience[0]?.title || "",
       coverMessage: app.coverMessage,
       facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: profile.rightToWork, salary, visaExpiresAt: profile.visaExpiresAt?.toISOString().slice(0, 10) ?? "" },
       cvFileName: `${fileSafeName(app.user.firstName, app.user.lastName)}_CV.pdf`,
@@ -268,6 +269,7 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
     else if (/full name|^name$|your name|\bname\b/.test(l) && !/company|employer|user ?name|file/.test(l)) set("type", fullName);
     else if (/e-?mail/.test(l) || f.type === "email") set("type", a.email);
     else if (/phone|mobile|tel/.test(l) || f.type === "tel") set("type", a.phone);
+    else if (/job title|current (role|position)|current (job )?title|previous (job )?title|most recent (role|title|position)|your (role|position|title)/.test(l) && f.tag !== "textarea") set("type", a.headline);
     else if (/linkedin/.test(l)) set("type", a.linkedin);
     else if (/website|portfolio|github|url/.test(l) && !/linkedin/.test(l)) set("type", a.website);
     else if (/city|location|town|where (are you|do you) (based|live)/.test(l)) set("type", a.location.split(",")[0].trim());
@@ -299,7 +301,7 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
         ].join(" "),
         user: JSON.stringify({
           job: packet.job,
-          candidate: { name: fullName, email: a.email, phone: a.phone, location: a.location, linkedin: a.linkedin, summary: a.summary, coverMessage: a.coverMessage, facts: a.facts, previousAnswers: stored.slice(0, 40) },
+          candidate: { name: fullName, email: a.email, phone: a.phone, location: a.location, linkedin: a.linkedin, summary: a.summary, currentJobTitle: a.headline, coverMessage: a.coverMessage, facts: a.facts, previousAnswers: stored.slice(0, 40) },
           fields: open.map((f) => ({ id: f.id, label: f.label, placeholder: f.placeholder, type: f.type, required: f.required, options: f.options.map((o) => o.label).slice(0, 40), context: f.context.slice(0, 200) })),
           pageText: pageText.slice(0, 1500),
         }),

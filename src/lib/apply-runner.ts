@@ -31,6 +31,8 @@ export interface ApplyPacket {
     linkedin: string;
     website: string;
     summary: string;
+    /** Current or most recent job title. */
+    headline: string;
     coverMessage: string;
     facts: { availability: string; noticePeriod: string; rightToWork: string; salary: string; visaExpiresAt: string };
     cvFileName: string;
@@ -54,6 +56,8 @@ export interface FormField {
   options: { value: string; label: string }[];
   /** True for a React-style combobox that needs typing then Enter. */
   combobox: boolean;
+  /** What the field already holds (a saved profile fills some in). */
+  value: string;
   /** Text around the field, for questions whose label is elsewhere. */
   context: string;
 }
@@ -170,10 +174,11 @@ const EXTRACT_FIELDS = `(() => {
     if ((type === "radio" || type === "checkbox") && el.name) {
       const key = type + ":" + el.name;
       let g = groups.get(key);
-      if (!g) { g = { id: n, tag: "input", type, name: el.name, label: "", placeholder: "", required: false, options: [], combobox: false, context: context(el) }; groups.set(key, g); out.push(g); n++; }
+      if (!g) { g = { id: n, tag: "input", type, name: el.name, label: "", placeholder: "", required: false, options: [], combobox: false, value: "", context: context(el) }; groups.set(key, g); out.push(g); n++; }
       const optLabel = optionLabel(el) || labelFor(el) || el.value;
       el.setAttribute("data-applya", String(g.id) + ":" + g.options.length);
       g.options.push({ value: el.value, label: optLabel });
+      if (el.checked) g.value = optLabel;
       g.required = g.required || el.required || !!el.closest("[aria-required='true'], .required");
       // The question is whatever labels the group, not the option.
       const fs = el.closest("fieldset"); const legend = fs ? text(fs.querySelector("legend")) : "";
@@ -183,7 +188,8 @@ const EXTRACT_FIELDS = `(() => {
     el.setAttribute("data-applya", String(n));
     const options = el.tagName === "SELECT" ? [...el.options].map((o) => ({ value: o.value, label: text(o) })).filter((o) => o.value !== "") : [];
     const combobox = el.getAttribute("role") === "combobox" || el.getAttribute("aria-autocomplete") === "list" || !!el.closest("[class*='select__'], [class*='Select'], [role='combobox']");
-    out.push({ id: n, tag: el.tagName.toLowerCase(), type, name: el.name || "", label: labelFor(el), placeholder: el.placeholder || "", required: el.required || el.getAttribute("aria-required") === "true" || /\\*/.test(labelFor(el)), options, combobox, context: context(el) });
+    const current = el.tagName === "SELECT" ? (el.selectedIndex >= 0 && el.options[el.selectedIndex].value !== "" ? text(el.options[el.selectedIndex]) : "") : type === "file" || type === "password" ? "" : String(el.value || "");
+    out.push({ id: n, tag: el.tagName.toLowerCase(), type, name: el.name || "", label: labelFor(el), placeholder: el.placeholder || "", required: el.required || el.getAttribute("aria-required") === "true" || /\\*/.test(labelFor(el)), options, combobox, value: current, context: context(el) });
     n++;
   }
   return out;
@@ -305,13 +311,16 @@ async function revealCvUpload(page: Page, log: string[]) {
       // No word boundary after the extension: text runs together ("CV.pdfUpdate").
       return /\\.(pdf|docx?|rtf)/i.test(box.textContent || "") || /\\b(cv|resume)\\b/i.test((el.closest("div, li, tr, p") || el).textContent || "");
     };
-    const hit = els.find((el) => {
+    const score = (el) => {
       const t = text(el);
-      if (!t || t.length > 60 || el.offsetParent === null) return false;
-      if (/^(update|upload|replace|change|add|use)( a| my| your)?( new| different| another)?( cv| resume|résumé)/.test(t) || /^(upload|update) (cv|resume)/.test(t) || /upload (a )?(new )?(cv|resume)/.test(t)) return true;
-      // Just "Update" / "Replace" beside the file on record.
-      return /^(update|upload|replace|change|edit)$/.test(t) && nearCvFile(el);
-    });
+      if (!t || t.length > 60 || el.offsetParent === null) return 0;
+      if (/^(update|upload|replace|change|add|use)( a| my| your)?( new| different| another)?( cv| resume|résumé)/.test(t) || /^(upload|update) (cv|resume)/.test(t) || /upload (a )?(new )?(cv|resume)/.test(t)) return 3;
+      // Just "Update" / "Replace" beside the file on record ("Edit" is usually something else).
+      if (/^(update|upload)$/.test(t) && nearCvFile(el)) return 2;
+      if (/^(replace|change)$/.test(t) && nearCvFile(el)) return 1;
+      return 0;
+    };
+    const hit = els.map((el) => ({ el, s: score(el) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s)[0]?.el;
     if (hit && hit.offsetParent !== null) { hit.click(); return (hit.innerText || hit.textContent || "").trim(); }
     return "";
   })()`).catch(() => "");
@@ -488,8 +497,13 @@ async function fillField(page: Page, field: FormField, plan: PlannedValue, cvPat
     }
     return;
   }
-  const value = Array.isArray(plan.value) ? plan.value.join(", ") : (plan.value ?? "");
+  let value = Array.isArray(plan.value) ? plan.value.join(", ") : (plan.value ?? "");
   if (!value) return;
+  // A phone box with its own country-code picker wants the national number.
+  if (field.type === "tel" || /phone|mobile/i.test(field.label)) {
+    const hasCountryPicker = await page.$(sel).then((h) => h?.evaluate((e) => Boolean((e.closest("div, fieldset, li") || e).querySelector("select, [role='combobox'], [class*='country'], [class*='flag'], [class*='dial'], [class*='intl']"))).catch(() => false));
+    if (hasCountryPicker && /^\+44/.test(value.replace(/\s+/g, ""))) value = value.replace(/\s+/g, "").replace(/^\+44/, "0");
+  }
   if (plan.action === "select" && field.tag === "select") {
     const match = field.options.find((o) => o.label.toLowerCase() === value.toLowerCase() || o.value.toLowerCase() === value.toLowerCase()) ?? field.options.find((o) => o.label.toLowerCase().includes(value.toLowerCase()));
     if (match) {
@@ -514,7 +528,7 @@ async function fillField(page: Page, field: FormField, plan: PlannedValue, cvPat
 }
 
 async function findButton(page: Page, kind: "submit" | "next") {
-  const re = kind === "submit" ? "/^(submit|submit application|send application|apply|apply now|send|complete application|finish|submit my application)$|submit/" : "/^(next|continue|next step|save and continue|proceed)$|^next\\b|continue/";
+  const re = kind === "submit" ? "/^(submit|submit application|send application|apply|apply now|send|complete application|finish|submit my application)$|submit/" : "/^(next|continue|next step|save and continue|save|proceed)$|^next\\b|continue/";
   const handle = await page.evaluateHandle(`(() => {
     const text = (el) => (el.innerText || el.value || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim().toLowerCase();
     const all = [...document.querySelectorAll("button, input[type=submit], input[type=button], a, [role=button], [role=link], span, div")].filter((el) => {
@@ -575,7 +589,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
   /** Required questions the plan had no honest answer for. */
   const unanswered = (fields: FormField[], plan: PlannedValue[]) =>
     fields
-      .filter((f) => f.required && f.type !== "hidden" && f.type !== "password")
+      .filter((f) => f.required && f.type !== "hidden" && f.type !== "password" && !f.value.trim())
       .filter((f) => {
         const p = plan.find((v) => v.id === f.id);
         if (!p || p.action === "skip") return true;
