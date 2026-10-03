@@ -8,6 +8,7 @@ import { SubmitButton } from "@/components/submit-button";
 import { Card, CardTitle, Field, Notice } from "@/components/ui";
 
 interface Initial {
+  field: string;
   keywords: string[];
   excludeKeywords: string[];
   locations: string[];
@@ -29,6 +30,9 @@ export function PreferencesForm({ initial, sources, showSources }: { initial: In
       <Card>
         <CardTitle>Roles</CardTitle>
         <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Your field" hint="One phrase, e.g. “actuarial”, “quantity surveying”, “clinical pharmacy”. A field new to Applya gets its own search for job boards and employers.">
+            <input className="input" name="field" defaultValue={initial.field} placeholder="actuarial" maxLength={80} />
+          </Field>
           <Field label="Keywords" hint="Words the title or advert should contain. One per line or comma-separated. e.g. actuarial, actuary, trainee actuary">
             <textarea className="textarea" name="keywords" rows={4} defaultValue={initial.keywords.join("\n")} />
           </Field>
@@ -117,7 +121,7 @@ export function PreferencesForm({ initial, sources, showSources }: { initial: In
         </p>
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <Field label="Your field" className="flex-1" hint="One phrase, e.g. “actuarial”, “quantity surveying”, “clinical pharmacy”.">
-            <input className="input" name="field" placeholder="actuarial" />
+            <input className="input" name="field" placeholder="actuarial" defaultValue={initial.field} />
           </Field>
           <SubmitButton variant="secondary" pending="Searching… this can take a minute">
             Find more sources for me

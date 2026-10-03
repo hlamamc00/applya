@@ -124,6 +124,7 @@ model Preference {
   id               String   @id @default(cuid())
   userId           String   @unique
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  field            String   @default("")   // the person's field, e.g. "actuarial"; new fields get source discovery
   keywords         Json     @default("[]") // words a title or description should contain
   excludeKeywords  Json     @default("[]") // words that rule a job out
   locations        Json     @default("[]") // e.g. ["United Kingdom", "London", "Remote"]
@@ -342,4 +343,18 @@ model PortalAccount {
   updatedAt   DateTime @updatedAt
 
   @@unique([userId, host])
+}
+
+/// A field someone has asked for (e.g. "quantity surveying"): web discovery
+/// of sources runs for it in the background, once, over the next scans.
+model FieldDiscovery {
+  id           String    @id @default(cuid())
+  field        String    @unique // normalised, lower case
+  status       String    @default("PENDING") // PENDING | DONE
+  attempts     Int       @default(0)
+  sourcesAdded Int       @default(0)
+  notes        Json      @default("[]")
+  requestedBy  String?
+  createdAt    DateTime  @default(now())
+  finishedAt   DateTime?
 }

@@ -5,14 +5,17 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { JOB_LEVELS } from "@/lib/types";
 import { int, list, str } from "@/lib/utils";
-import { discoverSources } from "@/lib/jobs/discover";
+import { discoverSources, normaliseField, queueFieldDiscovery } from "@/lib/jobs/discover";
+import { startScan } from "@/lib/jobs/scan";
 import type { FormState } from "./auth";
 
 export async function savePreferences(_: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser("/app/preferences");
   const levels = formData.getAll("levels").map(String).filter((l) => (JOB_LEVELS as readonly string[]).includes(l));
   const minScore = Math.min(100, Math.max(0, int(formData.get("minScore")) ?? 40));
+  const field = str(formData.get("field")).slice(0, 80);
   const data = {
+    field,
     keywords: list(formData.get("keywords")),
     excludeKeywords: list(formData.get("excludeKeywords")),
     locations: list(formData.get("locations")),
@@ -26,6 +29,12 @@ export async function savePreferences(_: FormState, formData: FormData): Promise
   };
   await db.preference.upsert({ where: { userId: user.id }, create: { userId: user.id, ...data }, update: data });
   revalidatePath("/app", "layout");
+  // A field nobody has asked for before: find sources for it now, in the background.
+  const queued = normaliseField(field) ? await queueFieldDiscovery(field, user.id) : false;
+  if (queued) {
+    const scan = await startScan("MANUAL", { onlyUserId: user.id }).catch(() => null);
+    return { ok: `Preferences saved. "${field}" is new to Applya, so it is now searching the web for job boards and employers in that field${scan?.started ? " and scanning them" : ""}; matches appear under Matches as they arrive.` };
+  }
   return { ok: "Preferences saved. The next scan will use them." };
 }
 

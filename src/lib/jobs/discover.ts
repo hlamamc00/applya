@@ -76,6 +76,46 @@ export function keywordCandidates(keywords: string[], where?: string): Candidate
     );
 }
 
+/** "Quantity Surveying " → "quantity surveying". */
+export function normaliseField(field: string) {
+  return field.toLowerCase().replace(/[^a-z0-9 &/-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Queues web discovery for a field nobody has asked for before. True when it was new. */
+export async function queueFieldDiscovery(field: string, userId?: string) {
+  const key = normaliseField(field);
+  if (!key) return false;
+  const existing = await db.fieldDiscovery.findUnique({ where: { field: key } });
+  if (existing) return false;
+  await db.fieldDiscovery.create({ data: { field: key, requestedBy: userId ?? null } });
+  return true;
+}
+
+/**
+ * Runs discovery for the fields still pending, within a time budget; a field
+ * stays pending while candidates remain unchecked, so it finishes over a few
+ * scans. Returns how many fields were worked on.
+ */
+export async function runPendingFieldDiscovery(budgetMs: number) {
+  const started = Date.now();
+  let worked = 0;
+  const pending = await db.fieldDiscovery.findMany({ where: { status: "PENDING", attempts: { lt: 6 } }, orderBy: { createdAt: "asc" }, take: 3 });
+  for (const f of pending) {
+    const left = budgetMs - (Date.now() - started);
+    if (left < 8_000) break;
+    const prefs = await db.preference.findMany({ where: { field: { contains: f.field, mode: "insensitive" } }, select: { keywords: true } });
+    const keywords = [...new Set(prefs.flatMap((p) => (Array.isArray(p.keywords) ? p.keywords.map(String) : [])))];
+    const report = await discoverSources({ field: f.field, keywords: keywords.length ? keywords : [f.field], userId: f.requestedBy ?? undefined, useWeb: true, budgetMs: Math.min(left - 2_000, 25_000) }).catch((error) => ({ added: [], alreadyThere: [], rejected: [], notes: [`failed: ${error instanceof Error ? error.message : String(error)}`] }));
+    const unfinished = report.notes.some((n) => /weren't checked in time/.test(n));
+    await db.fieldDiscovery.update({
+      where: { id: f.id },
+      data: { attempts: { increment: 1 }, sourcesAdded: { increment: report.added.length }, notes: report.notes.slice(0, 10), status: unfinished && f.attempts < 5 ? "PENDING" : "DONE", finishedAt: unfinished && f.attempts < 5 ? null : new Date() },
+    });
+    worked += 1;
+  }
+  return worked;
+}
+
 /**
  * Every member's keywords get a search on every keyed aggregator, so new
  * keywords (and newly added keys) take effect at the next scan without

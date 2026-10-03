@@ -18,6 +18,7 @@ export default async function PreferencesPage() {
       <PageHeader eyebrow="Job preferences" title="What to look for" intro="The scanner reads every enabled source daily and scores each advert against these preferences. Matches above your threshold appear under Matches; drafts are prepared for the strongest ones." />
       <PreferencesForm
         initial={{
+          field: prefs.field,
           keywords: strings(prefs.keywords),
           excludeKeywords: strings(prefs.excludeKeywords),
           locations: strings(prefs.locations),

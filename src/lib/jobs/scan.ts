@@ -40,6 +40,7 @@ interface PendingDraft {
 interface Progress {
   onlyUserId?: string;
   keywordSourcesEnsured?: boolean;
+  fieldsChecked?: boolean;
   sourcesDone: string[];
   newJobIds: string[];
   usersDone: string[];
@@ -89,6 +90,14 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
         await ensureKeywordSources().catch((error) => console.warn("[scan] keyword sources", error));
         progress.keywordSourcesEnsured = true;
         await save();
+      }
+      // Fields nobody has asked for before get their web discovery first, a slice per step.
+      if (!progress.fieldsChecked && timeLeft() > 12_000) {
+        const { runPendingFieldDiscovery } = await import("./discover");
+        const worked = await runPendingFieldDiscovery(timeLeft() - 3_000).catch(() => 0);
+        progress.fieldsChecked = worked === 0;
+        await save();
+        if (worked > 0) continue;
       }
       const source = await db.jobSource.findFirst({ where: { enabled: true, id: { notIn: progress.sourcesDone } }, orderBy: { name: "asc" } });
       if (!source) {
