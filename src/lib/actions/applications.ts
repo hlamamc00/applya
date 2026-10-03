@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { parseCv } from "@/lib/cv";
+import { parseCv, rightToWorkStatement } from "@/lib/cv";
 import { latestCv, prepareDraft, saveCvVersion } from "@/lib/applications";
 import { startScan } from "@/lib/jobs/scan";
 import { isApplicationStatus } from "@/lib/types";
@@ -93,7 +93,7 @@ export async function retailor(formData: FormData) {
     {
       cv: cvFromProfile(user, profile),
       job: { title: job.title, company: job.company, location: job.location, description: job.description },
-      facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: profile.rightToWork, salaryNote: profile.salaryNote },
+      facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: rightToWorkStatement(profile.rightToWork), salaryNote: profile.salaryNote },
     },
     { allowAi: profile.aiTailoring },
   );

@@ -79,6 +79,17 @@ type ProfileLike = {
 const asArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
 /** The CV as the profile stands today, before any tailoring. */
+/**
+ * What a message says about the right to work: just whether sponsorship is
+ * needed. Visa type and expiry date stay for forms that ask for them.
+ */
+export function rightToWorkStatement(rightToWork: string) {
+  const text = rightToWork.trim();
+  if (!text) return "";
+  const needs = /(require|need|will need|would need|seeking|looking for)[^.]{0,30}sponsor/i.test(text) && !/(no|not|without|don't|do not|doesn't)[^.]{0,20}(require|need)[^.]{0,30}sponsor/i.test(text) && !/no sponsorship/i.test(text);
+  return needs ? "I will require visa sponsorship." : "I have the right to work in the UK and do not require sponsorship.";
+}
+
 export function cvFromProfile(user: { firstName: string; lastName: string; email: string }, profile: ProfileLike): CvDocument {
   return {
     name: `${user.firstName} ${user.lastName}`.trim(),

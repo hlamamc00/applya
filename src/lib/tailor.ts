@@ -110,7 +110,7 @@ async function tailorWithAi(input: TailorInput): Promise<TailorOutput> {
   const facts = [
     input.facts.availability && `Availability: ${input.facts.availability}`,
     input.facts.noticePeriod && `Notice period: ${input.facts.noticePeriod}`,
-    input.facts.rightToWork && `Right to work (mention only if the advert asks about eligibility or sponsorship): ${input.facts.rightToWork}`,
+    input.facts.rightToWork && `Right to work (mention only if the advert asks about eligibility or sponsorship, and only in these words — never a visa type or an expiry date): ${input.facts.rightToWork}`,
   ]
     .filter(Boolean)
     .join("\n");

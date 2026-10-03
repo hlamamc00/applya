@@ -1,6 +1,6 @@
 import "server-only";
 import { db } from "./db";
-import { cvFromProfile, parseCv, type CvDocument } from "./cv";
+import { cvFromProfile, parseCv, rightToWorkStatement, type CvDocument } from "./cv";
 import { tailor } from "./tailor";
 
 // Creating and moving applications. Every change writes an ApplicationEvent
@@ -18,7 +18,7 @@ export async function prepareDraft(userId: string, jobId: string, options: { aut
     {
       cv: base,
       job: { title: job.title, company: job.company, location: job.location, description: job.description },
-      facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: profile.rightToWork, salaryNote: profile.salaryNote },
+      facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: rightToWorkStatement(profile.rightToWork), salaryNote: profile.salaryNote },
     },
     { allowAi: profile.aiTailoring },
   );
