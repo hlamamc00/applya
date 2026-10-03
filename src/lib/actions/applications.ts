@@ -11,7 +11,7 @@ import { startScan } from "@/lib/jobs/scan";
 import { isApplicationStatus } from "@/lib/types";
 import { str } from "@/lib/utils";
 import { emailSchema } from "@/lib/validation";
-import { applyEmailFor, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
+import { applyEmailFor, asAnswers, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
 import type { FormState } from "./auth";
 
 async function ownedApplication(id: string, userId: string) {
@@ -205,4 +205,37 @@ export async function sendByEmail(_: FormState, formData: FormData): Promise<For
   const result = await submitByEmail(app.id, to.data, subject);
   revalidatePath("/app", "layout");
   return result.ok ? { ok: result.message } : { error: result.message };
+}
+
+/**
+ * Answers to the questions a form asked that the profile couldn't cover.
+ * They are kept on the application (and, if asked, on the profile for future
+ * forms), then the browser goes back and carries on.
+ */
+export async function answerQuestions(_: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser("/app/applications");
+  const app = await db.application.findFirst({ where: { id: str(formData.get("id")), userId: user.id }, include: { job: true, user: { include: { profile: true } } } });
+  if (!app) return { error: "Application not found." };
+  const given: { question: string; answer: string }[] = [];
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("q:")) continue;
+    const question = key.slice(2).trim();
+    const answer = formData.getAll(key).map((v) => String(v).trim()).filter(Boolean).join("; ");
+    if (question && answer) given.push({ question, answer });
+  }
+  if (given.length === 0) return { error: "Answer at least one question." };
+  const merge = (old: unknown) => [...asAnswers(old).filter((x) => !given.some((g) => g.question === x.question)), ...given];
+  await db.application.update({ where: { id: app.id }, data: { answers: merge(app.answers) } });
+  if (formData.get("remember") === "on" && app.user.profile) {
+    await db.profile.update({ where: { id: app.user.profile.id }, data: { answers: merge(app.user.profile.answers) } });
+  }
+  const then = str(formData.get("then"));
+  if (then === "apply" || then === "preview") {
+    if (!canApplyOnSite(app.job)) return { error: "This advert asks for applications by email, not on a site." };
+    const result = await startSiteApply(app.id, then === "preview" ? "PREVIEW" : "LIVE");
+    revalidatePath(`/app/applications/${app.id}`);
+    return result.ok ? { ok: `Saved ${given.length} answer${given.length === 1 ? "" : "s"}. ${result.message}` } : { error: result.message };
+  }
+  revalidatePath(`/app/applications/${app.id}`);
+  return { ok: `Saved ${given.length} answer${given.length === 1 ? "" : "s"}.` };
 }

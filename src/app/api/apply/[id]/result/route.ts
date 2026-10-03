@@ -10,7 +10,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const given = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (!secret || given !== secret) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   const { id } = await params;
-  const body = (await request.json()) as { attemptId: string; status: string; detail: string; finalUrl?: string; log?: string[]; screenshotBase64?: string };
+  const body = (await request.json()) as { attemptId: string; status: string; detail: string; finalUrl?: string; log?: string[]; screenshotBase64?: string; questions?: { label: string; type: string; options: string[]; context: string }[] };
   const attempt = await db.applicationAttempt.findFirst({ where: { id: body.attemptId, applicationId: id } });
   if (!attempt) return NextResponse.json({ error: "No such attempt" }, { status: 404 });
   await recordResult(attempt.id, body);

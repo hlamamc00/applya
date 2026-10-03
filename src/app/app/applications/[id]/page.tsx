@@ -16,6 +16,7 @@ import { CvPreview } from "./cv-preview";
 import { CvEditor } from "./cv-editor";
 import { MessageForm } from "./message-form";
 import { Decision } from "./decision";
+import type { OpenQuestion } from "./questions-form";
 
 export const metadata: Metadata = { title: "Application" };
 
@@ -34,7 +35,7 @@ export default async function ApplicationPage({ params, searchParams }: { params
   const approvedIsLatest = app.approvedCvId && version && app.approvedCvId === version.id;
   const mailbox = await db.mailAccount.findUnique({ where: { userId: user.id }, select: { fromEmail: true } });
   const advertEmail = applyEmailFor(app.job, app);
-  const latestAttempt = await db.applicationAttempt.findFirst({ where: { applicationId: app.id, kind: "FORM" }, orderBy: { startedAt: "desc" }, select: { id: true, status: true, detail: true, finalUrl: true, mode: true, finishedAt: true, screenshot: true } });
+  const latestAttempt = await db.applicationAttempt.findFirst({ where: { applicationId: app.id, kind: "FORM" }, orderBy: { startedAt: "desc" }, select: { id: true, status: true, detail: true, finalUrl: true, mode: true, finishedAt: true, screenshot: true, questions: true } });
 
   return (
     <>
@@ -126,7 +127,7 @@ export default async function ApplicationPage({ params, searchParams }: { params
               }
               latest={
                 latestAttempt
-                  ? { status: latestAttempt.status, detail: latestAttempt.detail, finalUrl: latestAttempt.finalUrl, mode: latestAttempt.mode, finishedAt: latestAttempt.finishedAt?.toISOString() ?? null, screenshotUrl: latestAttempt.screenshot ? `/app/applications/${app.id}/attempts/${latestAttempt.id}/screenshot.jpg` : null }
+                  ? { status: latestAttempt.status, detail: latestAttempt.detail, finalUrl: latestAttempt.finalUrl, mode: latestAttempt.mode, finishedAt: latestAttempt.finishedAt?.toISOString() ?? null, questions: Array.isArray(latestAttempt.questions) ? (latestAttempt.questions as unknown as OpenQuestion[]) : [], screenshotUrl: latestAttempt.screenshot ? `/app/applications/${app.id}/attempts/${latestAttempt.id}/screenshot.jpg` : null }
                   : null
               }
             />

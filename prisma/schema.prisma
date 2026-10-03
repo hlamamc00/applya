@@ -115,6 +115,8 @@ model Profile {
   cvUploadedAt    DateTime?
   pendingImport   Json?
   updatedAt       DateTime @updatedAt
+  // Answers to application-form questions, remembered for future forms: [{question,answer}].
+  answers        Json      @default("[]")
 }
 
 /// What the scanner looks for on this user's behalf.
@@ -252,6 +254,8 @@ model Application {
 
   @@unique([userId, jobId])
   @@index([userId, status])
+  // Answers the applicant gave for this application's form: [{question,answer}].
+  answers      Json      @default("[]")
 }
 
 /// One go at sending an application: by email, or by filling in the form on
@@ -272,6 +276,8 @@ model ApplicationAttempt {
   finishedAt    DateTime?
 
   @@index([applicationId, startedAt])
+  // Required questions the form asked that nothing could answer: [{label,type,options,context}].
+  questions   Json      @default("[]")
 }
 
 /// The history shown on an application: created, tailored, approved, sent...

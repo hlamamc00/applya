@@ -8,6 +8,7 @@ import type { FormState } from "@/lib/actions/auth";
 import { SubmitButton } from "@/components/submit-button";
 import { Button, Field, Notice } from "@/components/ui";
 import { LiveStatus } from "@/components/live-status";
+import { QuestionsForm, type OpenQuestion } from "./questions-form";
 
 export interface DecisionProps {
   applicationId: string;
@@ -20,7 +21,7 @@ export interface DecisionProps {
   subject: string;
   approvedLine: string | null;
   submittedLine: string | null;
-  latest: { status: string; detail: string; finalUrl: string | null; screenshotUrl: string | null; mode: string; finishedAt: string | null } | null;
+  latest: { status: string; detail: string; finalUrl: string | null; screenshotUrl: string | null; mode: string; finishedAt: string | null; questions: OpenQuestion[] } | null;
 }
 
 /** The right-hand card: approve, and send by email or apply on the site. */
@@ -94,7 +95,7 @@ export function Decision(p: DecisionProps) {
         {p.status === "NEEDS_YOU" && p.latest && (
           <div className="mt-3 rounded-lg border border-amber/40 bg-amber-soft p-3 text-sm">
             <p className="font-semibold">{/additional information/i.test(p.latest.detail) ? p.latest.detail : `Needs you: ${p.latest.detail}`}</p>
-            {/additional information/i.test(p.latest.detail) && (
+            {/additional information/i.test(p.latest.detail) && p.latest.questions.length === 0 && (
               <p className="mt-1 text-xs text-graphite">Add the missing details to your <Link href="/app/profile" className="underline">profile</Link> and press &ldquo;Apply on their site now&rdquo; again, or answer on the site yourself.</p>
             )}
             {p.latest.finalUrl && (
@@ -109,6 +110,9 @@ export function Decision(p: DecisionProps) {
               </a>
             )}
           </div>
+        )}
+        {p.latest && p.latest.questions.length > 0 && (p.latest.status === "NEEDS_YOU" || p.latest.status === "PREVIEWED") && !working && (
+          <QuestionsForm applicationId={p.applicationId} questions={p.latest.questions} previewMode={p.latest.mode === "PREVIEW"} />
         )}
         {p.latest?.mode === "PREVIEW" && p.latest.status === "PREVIEWED" && p.latest.screenshotUrl && (
           <div className="mt-3 rounded-lg border border-mist bg-cloud p-3 text-sm">

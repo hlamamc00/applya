@@ -38,6 +38,8 @@ export interface ApplyPacket {
   };
   /** Job-site accounts the browser may sign in with when a site insists. */
   logins?: { host: string; username: string; password: string }[];
+  /** Answers the applicant has given to form questions before: used whenever a question matches. */
+  answers?: { question: string; answer: string }[];
 }
 
 export interface FormField {
@@ -69,6 +71,15 @@ export interface ApplyReport {
   finalUrl: string;
   log: string[];
   screenshotBase64?: string;
+  /** Required questions the form asked that nothing could answer, for the applicant to answer in the portal. */
+  questions?: OpenQuestion[];
+}
+
+export interface OpenQuestion {
+  label: string;
+  type: string;
+  options: string[];
+  context: string;
 }
 
 export interface RunnerDeps {
@@ -476,9 +487,10 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
   await page.setViewport({ width: 1280, height: 1000 });
   page.setDefaultTimeout(NAV_TIMEOUT);
 
+  let openQuestions: OpenQuestion[] = [];
   const finish = async (status: ApplyReport["status"], detail: string): Promise<ApplyReport> => {
     say(detail);
-    return { status, detail, finalUrl: page.url(), log, screenshotBase64: await screenshot(page) };
+    return { status, detail, finalUrl: page.url(), log, screenshotBase64: await screenshot(page), questions: openQuestions };
   };
   /** Required questions the plan had no honest answer for. */
   const unanswered = (fields: FormField[], plan: PlannedValue[]) =>
@@ -491,8 +503,8 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
         const v = Array.isArray(p.value) ? p.value.join("") : (p.value ?? "");
         return !v.trim();
       })
-      .map((f) => (f.label || f.placeholder || f.name).replace(/\s*\*?\s*(required)?\s*$/i, "").slice(0, 80))
-      .filter((name, i, all) => name && !/^select\.{0,3}$/i.test(name) && all.indexOf(name) === i);
+      .map((f) => ({ field: f, name: (f.label || f.placeholder || f.name).replace(/\s*\*?\s*(required)?\s*$/i, "").slice(0, 160) }))
+      .filter(({ name }, i, all) => name && !/^select\.{0,3}$/i.test(name) && all.findIndex((x) => x.name === name) === i);
 
   try {
     say(`Opening ${start}`);
@@ -576,14 +588,16 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
         }
       }
       await sleep(1000);
-      const missing = unanswered(fields, plan);
+      const open = unanswered(fields, plan);
+      const missing = open.map((o) => o.name);
+      openQuestions = open.map(({ field, name }) => ({ label: name, type: field.type, options: field.options.map((o) => o.label).slice(0, 40), context: field.context.slice(0, 300) }));
       if (missing.length) log.push(`No answer in your profile for: ${missing.join("; ")}`);
       const submit = await findButton(page, "submit");
       const next = submit ? null : await findButton(page, "next");
       if (!submit && !next) return finish("NEEDS_YOU", "Filled the form but couldn't find its Submit button.");
       if (packet.dryRun && submit) return finish("PREVIEWED", missing.length ? `Filled in, not submitted (preview). Additional information required: ${missing.join("; ")}.` : "Filled in, not submitted (preview).");
       // Never guess: stop here and ask rather than submit a half-answered form.
-      if (missing.length) return finish("NEEDS_YOU", `Additional information required: ${missing.join("; ")}. Add it to your profile (or answer on the site) and try again.`);
+      if (missing.length) return finish("NEEDS_YOU", `Additional information required: ${missing.join("; ")}. Answer below and the browser will carry on.`);
       await tickCaptchaBox(page, log);
       if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site is showing a CAPTCHA, which has to be solved by a person.");
       const button = (submit ?? next)!;

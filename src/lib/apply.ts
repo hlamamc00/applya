@@ -150,6 +150,7 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
   // job-board account is needed: the browser tries those routes first.
   const alternatives = await findAlternativeAdverts(app.job).catch(() => [] as string[]);
   const portals = await db.portalAccount.findMany({ where: { userId: app.userId } });
+  const answers = [...asAnswers(profile.answers), ...asAnswers(app.answers)];
   const logins = portals.flatMap((p) => {
     try {
       return [{ host: p.host, username: p.username, password: decrypt(p.passwordEnc) }];
@@ -162,6 +163,7 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
     attemptId,
     dryRun: attempt.mode === "PREVIEW",
     logins,
+    answers,
     job: { url: app.job.url, applyUrl: app.job.applyUrl, title: app.job.title, company: app.job.company, alternatives },
     applicant: {
       firstName: app.user.firstName,
@@ -180,11 +182,57 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
   };
 }
 
+export type StoredAnswer = { question: string; answer: string };
+
+export function asAnswers(v: unknown): StoredAnswer[] {
+  return Array.isArray(v) ? v.filter((x): x is StoredAnswer => Boolean(x) && typeof x === "object" && typeof (x as StoredAnswer).question === "string" && typeof (x as StoredAnswer).answer === "string") : [];
+}
+
+const normalise = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/\(required\)|\*|required/g, " ")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** A stored answer whose question is this field's question (or near enough). */
+export function answerFor(field: FormField, answers: StoredAnswer[]): StoredAnswer | undefined {
+  const label = normalise(field.label || field.placeholder || field.name);
+  if (!label) return undefined;
+  const exact = answers.find((x) => normalise(x.question) === label);
+  if (exact) return exact;
+  const words = new Set(label.split(" ").filter((w) => w.length > 2));
+  let best: { a: StoredAnswer; score: number } | null = null;
+  for (const x of answers) {
+    const q = normalise(x.question);
+    if (!q) continue;
+    if (label.includes(q) || q.includes(label)) return x;
+    const qw = q.split(" ").filter((w) => w.length > 2);
+    const overlap = qw.filter((w) => words.has(w)).length / Math.max(words.size, qw.length);
+    if (overlap >= 0.8 && (!best || overlap > best.score)) best = { a: x, score: overlap };
+  }
+  return best?.a;
+}
+
+/** The plan for a field from an answer the applicant gave: an option by label, a tick, or text. */
+function planFromAnswer(f: FormField, answer: string): PlannedValue {
+  if (f.type === "file") return { id: f.id, action: "skip" };
+  if (f.options.length) {
+    const wanted = answer.split(/\s*[;|]\s*|\s*,\s*(?=[A-Z])/).map((s) => s.trim()).filter(Boolean);
+    const picks = f.options.filter((o) => wanted.some((w) => o.label.toLowerCase() === w.toLowerCase() || o.value.toLowerCase() === w.toLowerCase())).map((o) => o.label);
+    const chosen = picks.length ? picks : f.options.filter((o) => o.label.toLowerCase().includes(answer.toLowerCase())).map((o) => o.label).slice(0, f.type === "checkbox" ? 10 : 1);
+    if (chosen.length) return { id: f.id, action: f.type === "radio" || f.type === "checkbox" ? "check" : "select", value: f.type === "checkbox" ? chosen : chosen[0] };
+  }
+  return { id: f.id, action: "type", value: answer };
+}
+
 /** What goes in each field: rules for the common ones, the AI for the rest. */
 export async function planValues(packet: ApplyPacket, fields: FormField[], pageText: string): Promise<PlannedValue[]> {
   const a = packet.applicant;
   const fullName = `${a.firstName} ${a.lastName}`.trim();
   const byRule = new Map<number, PlannedValue>();
+  const stored = packet.answers ?? [];
   const yes = (f: FormField, want: RegExp) => f.options.find((o) => want.test(o.label) || want.test(o.value));
   for (const f of fields) {
     const l = `${f.label} ${f.placeholder} ${f.name}`.toLowerCase();
@@ -235,6 +283,12 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
     else if (/current (company|employer)/.test(l)) set("type", "");
   }
   // The AI covers the questions the rules didn't, with the rules' answers as given.
+  // What the applicant answered before (in the portal) beats every rule.
+  for (const f of fields) {
+    if (f.type === "password" || f.type === "file") continue;
+    const hit = answerFor(f, stored);
+    if (hit) byRule.set(f.id, planFromAnswer(f, hit.answer));
+  }
   const open = fields.filter((f) => !byRule.has(f.id) && f.type !== "password" && f.type !== "file");
   if (open.length && aiAvailable()) {
     try {
@@ -245,7 +299,7 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
         ].join(" "),
         user: JSON.stringify({
           job: packet.job,
-          candidate: { name: fullName, email: a.email, phone: a.phone, location: a.location, linkedin: a.linkedin, summary: a.summary, coverMessage: a.coverMessage, facts: a.facts },
+          candidate: { name: fullName, email: a.email, phone: a.phone, location: a.location, linkedin: a.linkedin, summary: a.summary, coverMessage: a.coverMessage, facts: a.facts, previousAnswers: stored.slice(0, 40) },
           fields: open.map((f) => ({ id: f.id, label: f.label, placeholder: f.placeholder, type: f.type, required: f.required, options: f.options.map((o) => o.label).slice(0, 40), context: f.context.slice(0, 200) })),
           pageText: pageText.slice(0, 1500),
         }),
@@ -265,13 +319,13 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
 }
 
 /** Keeps the browser's report and moves the application on. */
-export async function recordResult(attemptId: string, result: { status: string; detail: string; finalUrl?: string; log?: string[]; screenshotBase64?: string }) {
+export async function recordResult(attemptId: string, result: { status: string; detail: string; finalUrl?: string; log?: string[]; screenshotBase64?: string; questions?: { label: string; type: string; options: string[]; context: string }[] }) {
   const attempt = await db.applicationAttempt.findUniqueOrThrow({ where: { id: attemptId }, include: { application: { include: { job: true, user: true } } } });
   const status = ["SUBMITTED", "PREVIEWED", "NEEDS_YOU", "FAILED"].includes(result.status) ? result.status : "FAILED";
   const screenshot = result.screenshotBase64 ? Buffer.from(result.screenshotBase64.slice(0, 2_000_000), "base64") : undefined;
   await db.applicationAttempt.update({
     where: { id: attemptId },
-    data: { status, detail: result.detail.slice(0, 1000), finalUrl: result.finalUrl?.slice(0, 1000) ?? null, log: (result.log ?? []).slice(-60), screenshot, finishedAt: new Date() },
+    data: { status, detail: result.detail.slice(0, 1000), finalUrl: result.finalUrl?.slice(0, 1000) ?? null, log: (result.log ?? []).slice(-60), screenshot, finishedAt: new Date(), questions: (result.questions ?? []).slice(0, 30) },
   });
   const app = attempt.application;
   for (const line of result.log ?? []) {
