@@ -1,5 +1,6 @@
 import "server-only";
 import { braveSearch } from "./discover";
+import { titleMatches } from "./title-match";
 
 // The same vacancy is often advertised on the employer's or agency's own
 // site, where applying needs no job-board account. Given a job from a board,
@@ -70,9 +71,8 @@ export async function findAlternativeAdverts(job: { url: string; title: string; 
       if (!res.ok) continue;
       const html = await res.text();
       const heading = `${/<title[^>]*>([^<]*)/i.exec(html)?.[1] ?? ""} ${/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html)?.[1]?.replace(/<[^>]+>/g, " ") ?? ""}`.toLowerCase();
-      const isAdvert = /"@type"\s*:\s*"JobPosting"/i.test(html) || />\s*apply( now| for this (job|role|position)| online)?\s*</i.test(html);
-      const hits = titleWords.filter((w) => heading.includes(w)).length / titleWords.length;
-      if (hits >= 0.7 && isAdvert) confirmed.push(c.url);
+      const isAdvert = /"@type"\s*:\s*"JobPosting"/i.test(html) || />\s*apply\b[^<]{0,40}</i.test(html) || /<title[^>]*>[^<]*\bapply\b/i.test(html) || /<input[^>]+type="file"/i.test(html);
+      if (titleMatches(job.title, heading) && isAdvert) confirmed.push(c.url);
     } catch {
       // Unreachable or slow: not a route worth sending the browser down.
     }

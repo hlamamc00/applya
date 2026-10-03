@@ -15,6 +15,7 @@ import { writeFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, ElementHandle, Page, Target } from "puppeteer-core";
+import { titleMatches } from "./jobs/title-match";
 
 export interface ApplyPacket {
   applicationId: string;
@@ -227,6 +228,57 @@ function loginFor(page: Page, logins: ApplyPacket["logins"]) {
   });
 }
 
+/** The "Sign in" / "Log in" button of a login form, by its wording. */
+async function findLoginButton(page: Page) {
+  const handle = await page.evaluateHandle(`(() => {
+    const text = (el) => (el.innerText || el.value || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    const all = [...document.querySelectorAll("button, input[type=submit], [role=button]")];
+    return all.find((el) => el.offsetParent !== null && !el.disabled && /^(sign in|log in|login|sign in to your account|continue)$/.test(text(el))) || null;
+  })()`);
+  return handle.asElement() as ElementHandle<HTMLElement> | null;
+}
+
+/**
+ * Signs in before applying when a login is saved for the site and the page
+ * offers "Sign in": a signed-in applicant usually gets the quick form and no
+ * CAPTCHA (The Actuary Jobs, say). True when now signed in.
+ */
+async function preSignIn(page: Page, start: string, logins: ApplyPacket["logins"], log: string[]) {
+  const login = loginFor(page, logins);
+  if (!login) return false;
+  const found = (await page
+    .evaluate(`(() => {
+      const text = (el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const els = [...document.querySelectorAll("a, button, [role='button']")].filter((el) => el.offsetParent !== null);
+      if (els.some((el) => /^(sign out|log out|logout|my account|my profile)$/.test(text(el)))) return "in";
+      const link = els.find((el) => /^(sign in|log in|login|sign in to apply)/.test(text(el)) && text(el).length < 40);
+      return link ? (link.href || "click") : "";
+    })()`)
+    .catch(() => "")) as string;
+  if (!found || found === "in") return false;
+  log.push(`Signing in to ${login.host} first`);
+  if (found === "click") {
+    await page.evaluate(`(() => { const el = [...document.querySelectorAll("a, button, [role='button']")].find((e) => /^(sign in|log in|login)/.test((e.innerText || "").trim().toLowerCase())); if (el) el.click(); })()`).catch(() => {});
+    await page.waitForNavigation({ timeout: 10_000, waitUntil: "domcontentloaded" }).catch(() => null);
+  } else {
+    await page.goto(found, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
+  }
+  await settle(page);
+  await dismissCookieBanner(page);
+  const fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+  if (!looksLikeLogin(fields)) {
+    await page.goto(start, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
+    await settle(page);
+    return false;
+  }
+  const ok = await signIn(page, fields, login, log);
+  if (!/\/job/i.test(page.url()) || page.url().split("?")[0] !== start.split("?")[0]) {
+    await page.goto(start, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
+    await settle(page);
+  }
+  return ok;
+}
+
 /** Signs in on an account wall with a stored login. True when the wall went away. */
 async function signIn(page: Page, fields: FormField[], login: { host: string; username: string; password: string }, log: string[]) {
   const user = fields.find((f) => f.type === "email") ?? fields.find((f) => /e-?mail|user ?name|login|account/i.test(`${f.label} ${f.name} ${f.placeholder}`) && f.type === "text") ?? fields.find((f) => f.type === "text");
@@ -258,7 +310,7 @@ async function signIn(page: Page, fields: FormField[], login: { host: string; us
     await type(pass, login.password);
   }
   await tickCaptchaBox(page, log);
-  const button = (await findButton(page, "submit")) ?? (await findButton(page, "next"));
+  const button = (await findLoginButton(page)) ?? (await findButton(page, "submit")) ?? (await findButton(page, "next"));
   const nav = page.waitForNavigation({ timeout: 15_000, waitUntil: "domcontentloaded" }).catch(() => null);
   if (button) await button.click().catch(() => button.evaluate((e) => e.click()));
   else await page.keyboard.press("Enter").catch(() => {});
@@ -624,16 +676,15 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     await sleep(2500);
     if (alternative) {
       // Make sure the page found by search is this vacancy before applying on it.
-      const heading = (await page.evaluate(() => `${document.title} ${[...document.querySelectorAll("h1, h2")].slice(0, 3).map((h) => h.textContent).join(" ")}`).catch(() => "")).toLowerCase();
-      const words = packet.job.title.toLowerCase().split(/\s[–—-]\s|\(|,|\|/)[0].replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2);
-      const hits = words.filter((w) => heading.includes(w)).length;
-      if (!words.length || hits / words.length < 0.6) return finish("NEEDS_YOU", `The page at ${new URL(start).hostname} isn't about this vacancy.`);
+      const heading = await page.evaluate(() => `${document.title} ${[...document.querySelectorAll("h1, h2")].slice(0, 3).map((h) => h.textContent).join(" ")}`).catch(() => "");
+      if (!titleMatches(packet.job.title, heading)) return finish("NEEDS_YOU", `The page at ${new URL(start).hostname} isn't about this vacancy.`);
     }
 
+    await dismissCookieBanner(page);
+    let signedIn = await preSignIn(page, start, packet.logins, log);
     // 1. Get to the form: follow Apply links, at most 5 hops.
     let fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const followed = new Set<string>();
-    let signedIn = false;
     const accountWall = async () => {
       const login = loginFor(page, packet.logins);
       if (!login) return finish("NEEDS_YOU", `This site (${new URL(page.url()).hostname}) wants you to sign in or create an account before applying. Add your login for it under Account → Job site logins and try again, or apply there yourself.`);
