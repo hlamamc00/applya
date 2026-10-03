@@ -7,6 +7,8 @@ import { prepareDraft } from "@/lib/applications";
 import { applyEmailFor, canApplyOnSite, startSiteApply, submitByEmail } from "@/lib/apply";
 import { onNetlify, sendMail, simpleEmail, siteUrl } from "@/lib/mail";
 import { canonicalUrl, jobFingerprint } from "./dedupe";
+import { randomBytes } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 
 // One scan: read every enabled source, store the adverts, read the advert
 // pages that feeds only summarised, score every open advert for each user
@@ -49,6 +51,8 @@ interface Progress {
 }
 
 const strings = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+/** An id in the shape Prisma's cuid() gives, made here so a batch insert can be referenced. */
+const newId = () => `c${randomBytes(12).toString("base64url").toLowerCase().replace(/[^a-z0-9]/g, "").padEnd(24, "0").slice(0, 24)}`;
 
 /** How many drafts one scan prepares for one person: the strongest matches, so a big first scan doesn't bury them. */
 const DRAFTS_PER_SCAN = 12;
@@ -139,36 +143,43 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
       const all = await db.job.findMany({ select: { id: true, url: true, title: true, company: true } });
       const byUrl = new Map(all.map((j) => [canonicalUrl(j.url), j.id]));
       const byPrint = new Map(all.filter((j) => j.company && j.company !== "See advert").map((j) => [jobFingerprint(j.title, j.company), j.id]));
+      // Two queries, not one per advert: over a pooled connection a source
+      // with 70 adverts would otherwise take the step past the request limit.
+      const seenAgain = new Set<string>();
+      const rows: Prisma.JobCreateManyInput[] = [];
       for (const job of found) {
         const print = job.company && job.company !== "See advert" ? jobFingerprint(job.title, job.company) : null;
         const existingId = mine.get(job.externalId) ?? byUrl.get(canonicalUrl(job.url)) ?? (print ? byPrint.get(print) : undefined);
         if (existingId) {
           // Seen again (here or on another board): keep the one advert open.
-          await db.job.update({ where: { id: existingId }, data: { lastSeenAt: seen, closedAt: null, salary: job.salary || undefined } });
+          seenAgain.add(existingId);
           continue;
         }
-        const created = await db.job.create({
-          data: {
-            sourceId: source.id,
-            externalId: job.externalId,
-            title: job.title.slice(0, 300),
-            company: job.company.slice(0, 200),
-            location: job.location.slice(0, 300),
-            remote: job.remote,
-            url: job.url,
-            description: job.description.slice(0, 60_000),
-            salary: job.salary.slice(0, 200),
-            postedAt: job.postedAt,
-            lastSeenAt: seen,
-            enrichedAt: needsEnrichment(kind) ? null : seen,
-          },
-          select: { id: true },
+        const id = newId();
+        rows.push({
+          id,
+          sourceId: source.id,
+          externalId: job.externalId,
+          title: job.title.slice(0, 300),
+          company: job.company.slice(0, 200),
+          location: job.location.slice(0, 300),
+          remote: job.remote,
+          url: job.url,
+          description: job.description.slice(0, 60_000),
+          salary: job.salary.slice(0, 200),
+          postedAt: job.postedAt,
+          lastSeenAt: seen,
+          enrichedAt: needsEnrichment(kind) ? null : seen,
         });
-        mine.set(job.externalId, created.id);
-        byUrl.set(canonicalUrl(job.url), created.id);
-        if (print) byPrint.set(print, created.id);
-        progress.newJobIds.push(created.id);
-        jobsNew += 1;
+        mine.set(job.externalId, id);
+        byUrl.set(canonicalUrl(job.url), id);
+        if (print) byPrint.set(print, id);
+      }
+      if (seenAgain.size) await db.job.updateMany({ where: { id: { in: [...seenAgain] } }, data: { lastSeenAt: seen, closedAt: null } });
+      if (rows.length) {
+        const result = await db.job.createMany({ data: rows, skipDuplicates: true });
+        progress.newJobIds.push(...rows.map((r) => r.id!));
+        jobsNew += result.count;
       }
       // Adverts that were on the board last time and aren't now have closed.
       await db.job.updateMany({ where: { sourceId: source.id, lastSeenAt: { lt: seen }, closedAt: null }, data: { closedAt: seen } });
