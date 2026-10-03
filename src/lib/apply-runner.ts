@@ -151,7 +151,18 @@ const EXTRACT_FIELDS = `(() => {
     if (box && !box.querySelector("input[type='file'], textarea")) return true;
     return /^e\\.g\\. /i.test(el.placeholder || "") && !el.closest("form")?.querySelector("input[type='file'], textarea");
   };
-  const controls = [...document.querySelectorAll("input, select, textarea")].filter((el) => !["hidden", "submit", "button", "reset", "image"].includes(el.type) && !el.disabled && !el.readOnly && (visible(el) || el.type === "file") && !furniture(el));
+  // A file input is often hidden behind a styled button, so it counts while
+  // its surroundings are shown; one inside a closed pop-up does not.
+  const shownAround = (el) => {
+    let node = el.parentElement;
+    while (node && node !== document.body) {
+      const s = getComputedStyle(node);
+      if (s.display === "none" || s.visibility === "hidden") return false;
+      node = node.parentElement;
+    }
+    return true;
+  };
+  const controls = [...document.querySelectorAll("input, select, textarea")].filter((el) => !["hidden", "submit", "button", "reset", "image"].includes(el.type) && !el.disabled && !el.readOnly && (visible(el) || (el.type === "file" && shownAround(el))) && !furniture(el));
   const out = []; const groups = new Map(); let n = 0;
   for (const el of controls) {
     if (el.closest("[data-applya-ignore]")) continue;
@@ -265,7 +276,8 @@ function looksLikeLogin(fields: FormField[]) {
 async function dismissCookieBanner(page: Page) {
   const clicked = await page.evaluate(`(() => {
     const els = [...document.querySelectorAll("button, a[role='button'], [role='button']")];
-    const hit = els.find((el) => /^(accept( all)?( cookies)?|allow all|i agree|agree|got it|ok(ay)?)$/i.test((el.textContent || "").replace(/\\s+/g, " ").trim()) && el.offsetParent !== null);
+    const text = (el) => (el.textContent || "").replace(/\\s+/g, " ").trim();
+    const hit = els.find((el) => /^(i accept|accept( all)?( cookies| & close| and close)?|allow all( cookies)?|i agree|agree( and (close|continue))?|yes,? i agree|got it|ok(ay)?|accept and continue|agree to all)$/i.test(text(el)) && el.offsetParent !== null);
     if (hit) { hit.click(); return true; }
     return false;
   })()`).catch(() => false);
@@ -280,9 +292,21 @@ async function dismissCookieBanner(page: Page) {
 async function revealCvUpload(page: Page, log: string[]) {
   const clicked = await page.evaluate(`(() => {
     const els = [...document.querySelectorAll("button, a, label, [role='button'], [role='tab']")];
+    const text = (el) => (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    const nearCvFile = (el) => {
+      let node = el;
+      for (let i = 0; i < 4 && node; i += 1) {
+        if (/\\.(pdf|docx?|rtf)\\b/i.test(node.textContent || "")) return true;
+        node = node.parentElement;
+      }
+      return false;
+    };
     const hit = els.find((el) => {
-      const t = (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
-      return t.length < 60 && /^(update|upload|replace|change|add|use)( a| my| your)?( new| different| another)?( cv| resume|résumé)/.test(t) || /^(upload|update) (cv|resume)/.test(t) || /upload (a )?(new )?(cv|resume)/.test(t) || /^update cv$/.test(t);
+      const t = text(el);
+      if (!t || t.length > 60 || el.offsetParent === null) return false;
+      if (/^(update|upload|replace|change|add|use)( a| my| your)?( new| different| another)?( cv| resume|résumé)/.test(t) || /^(upload|update) (cv|resume)/.test(t) || /upload (a )?(new )?(cv|resume)/.test(t)) return true;
+      // Just "Update" / "Replace" beside the file on record.
+      return /^(update|upload|replace|change|edit)$/.test(t) && nearCvFile(el);
     });
     if (hit && hit.offsetParent !== null) { hit.click(); return (hit.innerText || hit.textContent || "").trim(); }
     return "";
@@ -470,7 +494,10 @@ async function findButton(page: Page, kind: "submit" | "next") {
     const all = [...document.querySelectorAll("button, input[type=submit], a[role=button], [role=button]")];
     const visible = (el) => el.offsetParent !== null && !el.disabled;
     const re = ${re};
-    return all.find((el) => visible(el) && re.test(text(el)) && !/cancel|back|previous|sign in|log in/.test(text(el))) || null;
+    const ok = all.filter((el) => visible(el) && re.test(text(el)) && !/cancel|back|previous|sign in|log in/.test(text(el)));
+    // The most specific wording wins: "submit application" over a page's own "apply now".
+    const rank = (el) => { const t = text(el); return /submit|send|complete|finish/.test(t) ? 2 : /continue|next/.test(t) ? 1 : 0; };
+    return ok.sort((a, b) => rank(b) - rank(a))[0] || null;
   })()`);
   return handle.asElement() as ElementHandle<HTMLElement> | null;
 }
@@ -573,6 +600,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     // flow that starts with screening questions.
     // A pop-up that only shows the saved CV and a Submit button has no
     // fields yet: its "Update CV" control reveals the file input.
+    await dismissCookieBanner(page);
     if (!looksLikeForm(fields) && !fields.some((f) => f.type === "file") && (await revealCvUpload(page, log))) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const stepStart = !looksLikeForm(fields) && fields.length > 0 && Boolean((await findButton(page, "next")) ?? (await findButton(page, "submit")));
     if (!looksLikeForm(fields) && !stepStart) return finish("NEEDS_YOU", "Couldn't find an application form on this site; apply there yourself with the CV and message from this page.");
@@ -628,6 +656,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       if (packet.dryRun && submit) return finish("PREVIEWED", missing.length ? `Filled in, not submitted (preview). Additional information required: ${missing.join("; ")}.` : "Filled in, not submitted (preview).");
       // Never guess: stop here and ask rather than submit a half-answered form.
       if (missing.length) return finish("NEEDS_YOU", `Additional information required: ${missing.join("; ")}. Answer below and the browser will carry on.`);
+      await dismissCookieBanner(page);
       await tickCaptchaBox(page, log);
       if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site is showing a CAPTCHA, which has to be solved by a person.");
       const button = (submit ?? next)!;
@@ -636,7 +665,11 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       const beforeText = await pageText(page);
       say(`Pressing "${label}"`);
       const nav = page.waitForNavigation({ timeout: 12_000, waitUntil: "domcontentloaded" }).catch(() => null);
-      await button.click().catch(() => button.evaluate((e) => e.click()));
+      await button.evaluate((e) => e.scrollIntoView({ block: "center" })).catch(() => {});
+      await button.click().catch(() => {});
+      // If nothing happened (an overlay took the click), press it from inside the page.
+      await Promise.race([nav, sleep(2500)]);
+      if (page.url() === before && (await pageText(page)) === beforeText) await button.evaluate((e) => e.click()).catch(() => {});
       await nav;
       await sleep(3000);
       const after = await pageText(page);
