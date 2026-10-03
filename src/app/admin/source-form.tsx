@@ -22,6 +22,7 @@ const help: Record<string, string> = {
   WORKABLE: "The subdomain from apply.workable.com/<subdomain>.",
   RSS: "Any job board's RSS/Atom feed. Madgex boards (e.g. theactuaryjobs.com) have /jobsrss/?keywords=…; add &page={page} to read several pages.",
   REED_RSS: "Searches reed.co.uk by keyword through its public feed. No key needed.",
+  LINKEDIN: "Searches LinkedIn's public job listings by keyword, as a signed-out visitor sees them. No key needed.",
   ADZUNA: "Searches Adzuna's UK index for the terms below. Needs ADZUNA_APP_ID and ADZUNA_APP_KEY (free at developer.adzuna.com).",
   REED: "Searches reed.co.uk's API for the terms below. Needs REED_API_KEY (free at reed.co.uk/developers).",
   JSEARCH: "Google for Jobs (LinkedIn, Indeed, Glassdoor, employer sites…) through JSearch on RapidAPI. Needs RAPIDAPI_KEY.",

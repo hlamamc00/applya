@@ -39,6 +39,7 @@ interface PendingDraft {
 
 interface Progress {
   onlyUserId?: string;
+  keywordSourcesEnsured?: boolean;
   sourcesDone: string[];
   newJobIds: string[];
   usersDone: string[];
@@ -83,6 +84,12 @@ export async function scanStep(trigger: "MANUAL" | "SCHEDULED", options: { onlyU
   try {
     // --- SOURCES: read each source and store its adverts ---------------------
     while (phase === "SOURCES" && timeLeft() > 3_000) {
+      if (!progress.keywordSourcesEnsured) {
+        const { ensureKeywordSources } = await import("./discover");
+        await ensureKeywordSources().catch((error) => console.warn("[scan] keyword sources", error));
+        progress.keywordSourcesEnsured = true;
+        await save();
+      }
       const source = await db.jobSource.findFirst({ where: { enabled: true, id: { notIn: progress.sourcesDone } }, orderBy: { name: "asc" } });
       if (!source) {
         phase = "ENRICH";

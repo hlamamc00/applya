@@ -127,7 +127,7 @@ const EXTRACT_FIELDS = `(() => {
     if (el.labels && el.labels.length) parts.push(...[...el.labels].map(text));
     const aria = el.getAttribute("aria-label"); if (aria) parts.push(aria);
     const wrap = el.closest("label"); if (wrap) parts.push(text(wrap));
-    const own = parts.filter(Boolean).join(" | ").trim();
+    const own = [...new Set(parts.filter(Boolean))].join(" | ").trim();
     if (own) return own.slice(0, 160);
     // Broken for= attributes are common: look beside the control, then beside its cell.
     for (const base of [el, el.parentElement, el.parentElement && el.parentElement.parentElement]) {
@@ -181,9 +181,29 @@ const EXTRACT_FIELDS = `(() => {
       g.options.push({ value: el.value, label: optLabel });
       if (el.checked) g.value = optLabel;
       g.required = g.required || el.required || !!el.closest("[aria-required='true'], .required");
-      // The question is whatever labels the group, not the option.
+      // The question is whatever labels the group, not the option: a legend,
+      // else the text of the smallest box holding every option minus the options.
       const fs = el.closest("fieldset"); const legend = fs ? text(fs.querySelector("legend")) : "";
-      g.label = legend || g.context.split(optLabel)[0].trim().slice(0, 200) || g.label;
+      const members = document.querySelectorAll("input[type='" + type + "'][name='" + CSS.escape(el.name) + "']");
+      let box = el.parentElement;
+      while (box && box !== document.body && box.querySelectorAll("input[type='" + type + "'][name='" + CSS.escape(el.name) + "']").length < members.length) box = box.parentElement;
+      // The options' own box often holds nothing but the options; the question
+      // is then in the parent (or the one above), so climb a little.
+      const optionTexts = [...members].map((m) => optionLabel(m) || labelFor(m)).filter(Boolean);
+      const questionIn = (node) => {
+        let q = text(node);
+        for (const l of optionTexts) q = q.split(l).join(" ");
+        q = q.replace(/\\s+/g, " ").trim();
+        return q.length > 240 ? "" : q;
+      };
+      let question = "";
+      for (let up = 0; box && box !== document.body && up < 4 && !question; up += 1) {
+        question = questionIn(box);
+        if (!question) box = box.parentElement;
+      }
+      g.label = legend || question || g.context.split(optLabel)[0].trim().slice(0, 200) || g.label;
+      g.required = g.required || /\\*/.test(g.label);
+      g.context = box && box !== document.body ? text(box).slice(0, 300) : g.context;
       continue;
     }
     el.setAttribute("data-applya", String(n));
@@ -608,9 +628,12 @@ async function findButton(page: Page, kind: "submit" | "next") {
     });
     const visible = (el) => (el.offsetParent !== null || getComputedStyle(el).position === "fixed") && !el.disabled;
     const re = ${re};
-    const ok = all.filter((el) => visible(el) && re.test(text(el)) && !/cancel|back|previous|sign in|log in/.test(text(el)));
+    const inDialog = (el) => Boolean(el.closest("dialog, [role=dialog], [aria-modal=true]"));
+    const dialogOpen = [...document.querySelectorAll("dialog, [role=dialog], [aria-modal=true]")].some((d) => d.offsetParent !== null || getComputedStyle(d).position === "fixed");
+    // With a pop-up open, only its own buttons count: the page's "Apply now" is behind it.
+    const ok = all.filter((el) => visible(el) && re.test(text(el)) && !/cancel|back|previous|sign in|log in/.test(text(el)) && (!dialogOpen || inDialog(el)));
     // The most specific wording wins: "submit application" over a page's own "apply now".
-    const rank = (el) => { const t = text(el); return /submit|send|complete|finish/.test(t) ? 2 : /continue|next/.test(t) ? 1 : 0; };
+    const rank = (el) => { const t = text(el); return (inDialog(el) ? 10 : 0) + (/submit|send|complete|finish/.test(t) ? 2 : /continue|next/.test(t) ? 1 : 0); };
     return ok.sort((a, b) => rank(b) - rank(a))[0] || null;
   })()`);
   return handle.asElement() as ElementHandle<HTMLElement> | null;
@@ -726,7 +749,9 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     // 2. Fill page after page (multi-step forms), at most 6 steps.
     for (let step = 0; step < 10; step += 1) {
       if (step > 0) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
-      if (fields.length === 0) break;
+      // A step with nothing to fill (a pop-up with the saved CV and a button): reveal the upload, else just press on.
+      if (fields.length === 0 && (await revealCvUpload(page, log))) fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
+      if (fields.length === 0 && !(await findButton(page, "submit")) && !(await findButton(page, "next"))) break;
       if (looksLikeLogin(fields)) {
         const stop = await accountWall();
         if (stop) return stop;
@@ -798,9 +823,15 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       const errors = /this field is required|is required|please (fill|enter|select|complete|upload|choose|answer)|invalid|must be|required field|can't be blank|cannot be (blank|empty)/i.test(after) && after !== beforeText;
       const samePlace = after === beforeText && page.url() === before;
       const sameFields = remaining.length === fields.length && remaining.every((r, i) => r.label === fields[i].label && r.type === fields[i].type);
-      if (samePlace) return finish("NEEDS_YOU", `Pressed "${label}" but the form didn't move on; some answers need you.`);
-      if (sameFields && errors) return finish("NEEDS_YOU", "The form came back with validation messages; some answers need you.");
-      if (remaining.length === 0 || (sameFields && !errors && submit)) {
+      if (samePlace || (sameFields && errors)) {
+        // Whatever is still blank is what it wants: ask in the portal.
+        const blank = remaining.filter((f) => f.type !== "hidden" && f.type !== "password" && f.type !== "file" && !f.value.trim());
+        openQuestions = blank.map((f) => ({ label: (f.label || f.placeholder || f.name).replace(/\s*\*?\s*(required)?\s*$/i, "").slice(0, 160), type: f.type, options: f.options.map((o) => o.label).slice(0, 40), context: f.context.slice(0, 300) })).filter((q, i, all) => q.label && all.findIndex((x) => x.label === q.label) === i);
+        if (openQuestions.length) return finish("NEEDS_YOU", `Additional information required: ${openQuestions.map((q) => q.label).join("; ")}. Answer below and the browser will carry on.`);
+        return finish("NEEDS_YOU", samePlace ? `Pressed "${label}" but the form didn't move on; some answers need you.` : "The form came back with validation messages; some answers need you.");
+      }
+      const moreToPress = Boolean((await findButton(page, "submit")) ?? (await findButton(page, "next")));
+      if ((remaining.length === 0 && !moreToPress) || (sameFields && !errors && submit)) {
         if (submit) return finish("NEEDS_YOU", `Pressed "${label}" but the site didn't confirm that the application was received. Check on the site before relying on it.`);
         return finish("NEEDS_YOU", `Pressed "${label}" and the form ended without a confirmation; finish it on the site.`);
       }

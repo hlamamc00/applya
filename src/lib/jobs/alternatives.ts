@@ -7,7 +7,7 @@ import { titleMatches } from "./title-match";
 // find those pages so the browser can apply there first and fall back to
 // the board.
 
-const BOARDS = /reed\.co\.uk|indeed\.|totaljobs|cv-library|linkedin\.com|glassdoor|theactuaryjobs|efinancialcareers|jobsite\.co|adzuna|jooble|careerjet|monster\.|jobserve|cwjobs|technojobs|milkround|gradcracker|targetjobs|google\.com|facebook\.com|twitter\.com|x\.com|youtube\.com|wikipedia|jobs\.ac\.uk/i;
+const BOARDS = /talent\.com|jobrapido|neuvoo|whatjobs|jooble|jobleads|workcircle|dreamworkhq|icanapply|breakroom|simplyhired|reed\.co\.uk|indeed\.|totaljobs|cv-library|linkedin\.com|glassdoor|theactuaryjobs|efinancialcareers|jobsite\.co|adzuna|jooble|careerjet|monster\.|jobserve|cwjobs|technojobs|milkround|gradcracker|targetjobs|google\.com|facebook\.com|twitter\.com|x\.com|youtube\.com|wikipedia|jobs\.ac\.uk/i;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 function tokens(s: string) {
@@ -23,7 +23,8 @@ export async function findAlternativeAdverts(job: { url: string; title: string; 
   if (!process.env.BRAVE_SEARCH_API_KEY?.trim() || !job.company) return [];
   const started = Date.now();
   const advertHost = new URL(job.url).hostname.replace(/^www\./, "");
-  const companyWords = tokens(job.company);
+  // Only distinctive words identify the employer's own site ("Neon Talent Solutions" is neon, not talent).
+  const companyWords = tokens(job.company).filter((w) => !/^(talent|talents|solutions?|recruitment|recruiting|recruiters?|consulting|consultancy|consultants?|partners?|associates?|group|global|international|services?|financial|finance|insurance|actuarial|careers?|jobs?|search|people|resourcing|staffing|limited|ltd|plc|llp|holdings|company|team|network|executive|professional|management|capital|advisory|london)$/.test(w));
   const titleWords = tokens(job.title);
   if (!companyWords.length || !titleWords.length) return [];
   // "Actuarial Analyst, Birmingham (Hybrid) - Multiple UK Locations" → "Actuarial Analyst"

@@ -33,6 +33,10 @@ The structured content a CV is built from: contact details and links, a headline
 
 Keywords, exclusions, locations, levels and areas of interest, a minimum match score, and three switches: daily scanning, review emails, and automatic approval of drafts (off by default; review a few drafts first).
 
+### Indeed, Glassdoor and LinkedIn
+
+Neither Indeed nor Glassdoor offers a jobs API any more and both refuse server-side readers (HTTP 403), so their adverts arrive through **Google for Jobs** (the JSearch source, `RAPIDAPI_KEY`), which indexes Indeed, Glassdoor, LinkedIn, Totaljobs and CV-Library listings, and through Adzuna. **LinkedIn** has its own source: its public job search as a signed-out visitor sees it (`LINKEDIN`, no key), with the description read from the advert page. Every member's keywords get one search on each aggregator whose key is set (Reed, Adzuna, Google for Jobs, LinkedIn, Jooble, Careerjet), created automatically at the start of each scan (`ensureKeywordSources`). Careers boards found by web search are kept only when they carry adverts for the field. Members see a count of sources; the list itself is for admins.
+
 ### One advert per vacancy
 
 The same vacancy appears on several boards, in several feeds of one board, and again when an agency re-posts it. `src/lib/jobs/dedupe.ts` keys adverts by canonical URL and by a fingerprint of title and employer (locations, filler and company suffixes removed); a scan folds a copy into the advert already held, whether open, closed or applied to, so matches and applications stay with one advert and nothing is listed twice. **Admin → Duplicate adverts → Merge duplicates** tidies copies that got in before this.

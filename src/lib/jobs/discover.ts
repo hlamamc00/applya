@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { BOARD_KINDS, type SourceKind } from "@/lib/types";
-import { connectors, type SourceConfig } from "./sources";
+import { connectors, sourceReady, type SourceConfig } from "./sources";
 
 // Finds places to read jobs from for a field, beyond the sources an admin
 // typed in. Three ways, used together when their keys are set:
@@ -50,12 +50,52 @@ export function boardFromUrl(url: string): { kind: SourceKind; token: string } |
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** 1. Keyword feeds that need no key. */
+/**
+ * One search per keyword on every aggregator whose key is set. Google for
+ * Jobs (JSearch) is how Indeed, Glassdoor and LinkedIn adverts get in: none
+ * of those three offers a jobs API and all sit behind bot walls.
+ */
 export function keywordCandidates(keywords: string[], where?: string): Candidate[] {
+  const place = where ? ` in ${where}` : " (UK)";
+  const engines: { kind: SourceKind; label: string }[] = [
+    { kind: "REED_RSS", label: "Reed" },
+    { kind: "ADZUNA", label: "Adzuna" },
+    { kind: "JSEARCH", label: "Google for Jobs" },
+    { kind: "LINKEDIN", label: "LinkedIn" },
+    { kind: "JOOBLE", label: "Jooble" },
+    { kind: "CAREERJET", label: "Careerjet" },
+  ];
   return keywords
     .map((k) => k.trim())
     .filter(Boolean)
     .slice(0, 8)
-    .map((k) => ({ kind: "REED_RSS" as SourceKind, name: `Reed: ${k}${where ? ` in ${where}` : ""}`, config: { query: k, where: where || undefined, auto: true }, via: "keyword" }));
+    .flatMap((k) =>
+      engines
+        .filter((e) => sourceReady(e.kind))
+        .map((e) => ({ kind: e.kind, name: `${e.label}: ${k}${e.kind === "REED_RSS" && !where ? "" : place}`, config: { query: k, where: where || undefined, days: 7, auto: true }, via: "keyword" })),
+    );
+}
+
+/**
+ * Every member's keywords get a search on every keyed aggregator, so new
+ * keywords (and newly added keys) take effect at the next scan without
+ * anyone pressing "Find sources".
+ */
+export async function ensureKeywordSources() {
+  const prefs = await db.preference.findMany({ select: { keywords: true, locations: true } });
+  const existing = new Set((await db.jobSource.findMany({ select: { kind: true, name: true } })).map((s) => `${s.kind}|${s.name}`));
+  let created = 0;
+  for (const p of prefs) {
+    const keywords = Array.isArray(p.keywords) ? p.keywords.map(String) : [];
+    for (const c of keywordCandidates(keywords)) {
+      const k = `${c.kind}|${c.name}`;
+      if (existing.has(k)) continue;
+      existing.add(k);
+      await db.jobSource.create({ data: { kind: c.kind, name: c.name, config: { ...c.config, via: c.via }, createdById: null } });
+      created += 1;
+    }
+  }
+  return created;
 }
 
 // --- 2a. Brave Search -------------------------------------------------------
@@ -214,6 +254,15 @@ export async function discoverSources(opts: { field: string; keywords: string[];
       if (count === 0 && !BOARD_KINDS.includes(c.kind)) {
         report.rejected.push({ name: c.name, reason: "returned no adverts" });
         continue;
+      }
+      // A careers board found by web search must actually carry adverts for the field.
+      if (BOARD_KINDS.includes(c.kind) && c.via !== "keyword") {
+        const words = [opts.field, ...opts.keywords].join(" ").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3);
+        const relevant = r.value.filter((j) => words.some((w) => `${j.title} ${j.description}`.toLowerCase().includes(w)));
+        if (words.length && relevant.length === 0) {
+          report.rejected.push({ name: c.name, reason: `no ${opts.field || "matching"} adverts on it` });
+          continue;
+        }
       }
       const name = (await db.jobSource.findUnique({ where: { kind_name: { kind: c.kind, name: c.name } } })) ? `${c.name} (${c.config.token ?? c.config.query ?? "feed"})` : c.name;
       await db.jobSource.create({ data: { kind: c.kind, name, config: { ...c.config, auto: true, via: c.via }, createdById: opts.userId ?? null } });

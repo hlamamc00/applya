@@ -38,7 +38,7 @@ export const JOB_LEVEL_LABELS: Record<JobLevel, string> = {
   SENIOR: "Senior",
 };
 
-export const SOURCE_KINDS = ["GREENHOUSE", "LEVER", "ASHBY", "WORKABLE", "RSS", "REED_RSS", "ADZUNA", "REED", "JSEARCH", "JOOBLE", "CAREERJET"] as const;
+export const SOURCE_KINDS = ["GREENHOUSE", "LEVER", "ASHBY", "WORKABLE", "RSS", "REED_RSS", "ADZUNA", "REED", "JSEARCH", "JOOBLE", "CAREERJET", "LINKEDIN"] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 export const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
@@ -50,7 +50,8 @@ export const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
   REED_RSS: "Reed search (no key)",
   ADZUNA: "Adzuna search",
   REED: "Reed API search",
-  JSEARCH: "Google for Jobs (JSearch)",
+  JSEARCH: "Google for Jobs (Indeed, Glassdoor, LinkedIn…)",
+  LINKEDIN: "LinkedIn search",
   JOOBLE: "Jooble search",
   CAREERJET: "Careerjet search",
 };
@@ -58,7 +59,7 @@ export const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
 /** Sources that read a company's own careers board. */
 export const BOARD_KINDS: readonly SourceKind[] = ["GREENHOUSE", "LEVER", "ASHBY", "WORKABLE"];
 /** Sources that take search terms. */
-export const SEARCH_KINDS: readonly SourceKind[] = ["REED_RSS", "ADZUNA", "REED", "JSEARCH", "JOOBLE", "CAREERJET"];
+export const SEARCH_KINDS: readonly SourceKind[] = ["REED_RSS", "ADZUNA", "REED", "JSEARCH", "JOOBLE", "CAREERJET", "LINKEDIN"];
 
 export const QUALIFICATION_STATUSES = ["PASSED", "PENDING", "PLANNED"] as const;
 export type QualificationStatus = (typeof QUALIFICATION_STATUSES)[number];

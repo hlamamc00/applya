@@ -436,6 +436,44 @@ async function reedRss(config: SourceConfig): Promise<FoundJob[]> {
   return jobs.map((j) => ({ ...j, company: j.company === "reed.co.uk" ? "See advert" : j.company }));
 }
 
+/**
+ * LinkedIn's public job search, as a signed-out visitor sees it (no API, no
+ * key): the cards carry title, employer, location, date and the advert's
+ * address; the description is read from the advert page afterwards.
+ */
+async function linkedin(config: SourceConfig): Promise<FoundJob[]> {
+  const query = config.query?.trim();
+  if (!query) throw new Error("LinkedIn search needs search terms");
+  const days = config.days ?? 7;
+  const jobs: FoundJob[] = [];
+  const seen = new Set<string>();
+  for (let start = 0; start < 25 * (config.pages ?? 3); start += 25) {
+    const params = new URLSearchParams({ keywords: query, location: config.where || "United Kingdom", f_TPR: `r${Math.max(1, days) * 86_400}`, start: String(start) });
+    const res = await fetch(`https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`, { headers: { "user-agent": BROWSER_UA, accept: "text/html" }, signal: AbortSignal.timeout(12_000) });
+    if (res.status === 400 || res.status === 404) break;
+    if (!res.ok) throw new Error(`LinkedIn answered ${res.status}`);
+    const html = await res.text();
+    const cards = html.split(/<li\b[^>]*>/).slice(1);
+    let added = 0;
+    for (const card of cards) {
+      const id = /data-entity-urn="urn:li:jobPosting:(\d+)"/.exec(card)?.[1];
+      const href = /class="base-card__full-link[^"]*"\s+href="([^"]+)"/.exec(card)?.[1];
+      if (!id || !href || seen.has(id)) continue;
+      seen.add(id);
+      const pick = (re: RegExp) => htmlToText(re.exec(card)?.[1] ?? "").trim();
+      const title = pick(/<h3[^>]*base-search-card__title[^>]*>([\s\S]*?)<\/h3>/);
+      const company = pick(/<h4[^>]*base-search-card__subtitle[^>]*>([\s\S]*?)<\/h4>/);
+      const location = pick(/<span[^>]*job-search-card__location[^>]*>([\s\S]*?)<\/span>/);
+      const posted = /<time[^>]*datetime="([^"]+)"/.exec(card)?.[1];
+      if (!title) continue;
+      jobs.push({ externalId: id, title, company: company || "See advert", location, remote: /remote/i.test(`${title} ${location}`), url: `https://www.linkedin.com/jobs/view/${id}/`, description: "", salary: "", postedAt: posted ? new Date(posted) : null });
+      added += 1;
+    }
+    if (added === 0) break;
+  }
+  return jobs;
+}
+
 // --- Keyed aggregators -------------------------------------------------------
 
 interface JSearchJob {
@@ -555,6 +593,7 @@ export const connectors: Record<SourceKind, (config: SourceConfig) => Promise<Fo
   JSEARCH: jsearch,
   JOOBLE: jooble,
   CAREERJET: careerjet,
+  LINKEDIN: linkedin,
 };
 
 /** The .env variable(s) a kind needs, if any. */
@@ -684,5 +723,5 @@ export async function enrichJob(job: FoundJob): Promise<FoundJob> {
 
 /** Feeds carry only a summary, so their jobs are worth a visit to the advert. */
 export function needsEnrichment(kind: SourceKind) {
-  return kind === "RSS" || kind === "REED_RSS" || kind === "JOOBLE" || kind === "CAREERJET";
+  return kind === "RSS" || kind === "REED_RSS" || kind === "JOOBLE" || kind === "CAREERJET" || kind === "LINKEDIN";
 }

@@ -20,7 +20,7 @@ interface Initial {
   reviewEmails: boolean;
 }
 
-export function PreferencesForm({ initial, sources }: { initial: Initial; sources: { name: string; kind: string }[] }) {
+export function PreferencesForm({ initial, sources, showSources }: { initial: Initial; sources: { name: string; kind: string }[]; showSources: boolean }) {
   const [state, action] = useActionState<FormState, FormData>(savePreferences, {});
   const [found, findAction] = useActionState<FormState, FormData>(findSourcesForMe, {});
   return (
@@ -109,9 +109,11 @@ export function PreferencesForm({ initial, sources }: { initial: Initial; source
 
     <form action={findAction} className="mt-6 space-y-6">
       <Card>
-        <CardTitle>Sources being scanned</CardTitle>
+        <CardTitle>{showSources ? "Sources being scanned" : "Where Applya looks"}</CardTitle>
         <p className="mb-3 text-sm text-graphite">
-          Save your keywords first, then let Applya look further afield: a reed.co.uk search for each keyword straight away, and, when web discovery is on, employers&apos; own careers boards and specialist job boards for your field.
+          {showSources
+            ? "Save your keywords first, then let Applya look further afield: a reed.co.uk search for each keyword straight away, and, when web discovery is on, employers' own careers boards and specialist job boards for your field."
+            : `Applya scans ${sources.length} job boards, aggregators and employers' own careers sites for you every day. Tell it your field and it looks further afield for more.`}
         </p>
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <Field label="Your field" className="flex-1" hint="One phrase, e.g. “actuarial”, “quantity surveying”, “clinical pharmacy”.">
@@ -123,7 +125,7 @@ export function PreferencesForm({ initial, sources }: { initial: Initial; source
         </div>
         {found.ok && <div className="mb-4"><Notice tone="green">{found.ok}</Notice></div>}
         {found.error && <div className="mb-4"><Notice tone="red">{found.error}</Notice></div>}
-        {sources.length === 0 ? (
+        {!showSources ? null : sources.length === 0 ? (
           <p className="text-sm text-graphite">No sources are set up yet.</p>
         ) : (
           <ul className="grid gap-1 text-sm sm:grid-cols-2">

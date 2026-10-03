@@ -30,6 +30,7 @@ export default async function PreferencesPage() {
           reviewEmails: prefs.reviewEmails,
         }}
         sources={sources}
+        showSources={user.role === "ADMIN"}
       />
     </>
   );
