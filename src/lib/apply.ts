@@ -176,7 +176,7 @@ export async function buildPacket(applicationId: string, attemptId: string): Pro
       summary: cv.summary,
       headline: cv.headline || cv.experience[0]?.title || "",
       coverMessage: app.coverMessage,
-      facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: profile.rightToWork, salary, visaExpiresAt: profile.visaExpiresAt?.toISOString().slice(0, 10) ?? "" },
+      facts: { availability: profile.availability, noticePeriod: profile.noticePeriod, rightToWork: profile.rightToWork, relocation: profile.relocation, salary, visaExpiresAt: profile.visaExpiresAt?.toISOString().slice(0, 10) ?? "" },
       cvFileName: `${fileSafeName(app.user.firstName, app.user.lastName)}_CV.pdf`,
       cvPdfBase64: Buffer.from(pdf).toString("base64"),
     },
@@ -248,6 +248,11 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
       if (/right to work|eligible to work|legally (entitled|authori[sz]ed)|work authori[sz]ation|permission to work/.test(l)) {
         const o = yes(f, /^yes/i);
         if (o) set("check", o.label);
+      } else if (/commut|relocat|within .{0,30}(distance|miles|km)|travel to|able to (work|be based) (in|at|from)|based (in|at|near)|local to|live (in|within|near)|willing to (work|move|travel)|days? (per|a) week (in|at)/.test(l) && !/(require|need)[^.]{0,20}sponsor/.test(l)) {
+        // Location questions: the profile's relocation line decides (yes to any UK location by default).
+        const willing = !/\b(not|no|unable|can't|cannot|only)\b/i.test(a.facts.relocation || "willing");
+        const o = yes(f, willing ? /^yes/i : /^no/i);
+        if (o) set("check", o.label);
       } else if (/sponsor|visa/.test(l) && /require|need/.test(l)) {
         const o = yes(f, /^no/i);
         if (o) set("check", o.label);
@@ -296,12 +301,12 @@ export async function planValues(packet: ApplyPacket, fields: FormField[], pageT
     try {
       const { data } = await generateJson<{ values: { id: number; action: string; value?: string | string[] }[] }>({
         system: [
-          "You fill in a job application form for a candidate, honestly, from the facts given. Never invent qualifications, employers or dates. Answer yes/no questions from the facts; for right to work in the UK the candidate answers yes and does not need sponsorship. For questions about the candidate's motivation or fit, write 2–4 sentences in British English from the summary and cover message. Choose options by their exact label. Skip optional marketing or demographic questions (action 'skip'); for required equal-opportunities questions choose 'Prefer not to say' if offered. If a question needs something the facts don't cover (a reference, an ID or NI number, a specific date, a previous address, a qualification not listed), answer with action 'skip' so the candidate can be asked; never guess.",
+          "You fill in a job application form for a candidate, honestly, from the facts given. Never invent qualifications, employers or dates. Answer yes/no questions from the facts; for right to work in the UK the candidate answers yes and does not need sponsorship. For questions about commuting distance, relocating, being based at or working from the advert's location, follow facts.relocation (by default the candidate is willing to relocate or commute anywhere in the UK, so answer yes); never answer no from the candidate's current address. For questions about the candidate's motivation or fit, write 2–4 sentences in British English from the summary and cover message. Choose options by their exact label. Skip optional marketing or demographic questions (action 'skip'); for required equal-opportunities questions choose 'Prefer not to say' if offered. If a question needs something the facts don't cover (a reference, an ID or NI number, a specific date, a previous address, a qualification not listed), answer with action 'skip' so the candidate can be asked; never guess.",
           'Reply with a JSON object only: {"values":[{"id":number,"action":"type"|"select"|"check"|"skip","value":string|string[]}]}. type = free text; select = one option label; check = one or more option labels. Include every field id given.',
         ].join(" "),
         user: JSON.stringify({
           job: packet.job,
-          candidate: { name: fullName, email: a.email, phone: a.phone, location: a.location, linkedin: a.linkedin, summary: a.summary, currentJobTitle: a.headline, coverMessage: a.coverMessage, facts: a.facts, previousAnswers: stored.slice(0, 40) },
+          candidate: { name: fullName, email: a.email, phone: a.phone, location: a.location, linkedin: a.linkedin, summary: a.summary, currentJobTitle: a.headline, coverMessage: a.coverMessage, facts: { ...a.facts, relocation: a.facts.relocation || "Willing to relocate or commute anywhere in the UK" }, previousAnswers: stored.slice(0, 40) },
           fields: open.map((f) => ({ id: f.id, label: f.label, placeholder: f.placeholder, type: f.type, required: f.required, options: f.options.map((o) => o.label).slice(0, 40), context: f.context.slice(0, 200) })),
           pageText: pageText.slice(0, 1500),
         }),

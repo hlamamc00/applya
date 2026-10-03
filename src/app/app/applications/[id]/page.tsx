@@ -35,6 +35,8 @@ export default async function ApplicationPage({ params, searchParams }: { params
   const approvedIsLatest = app.approvedCvId && version && app.approvedCvId === version.id;
   const mailbox = await db.mailAccount.findUnique({ where: { userId: user.id }, select: { fromEmail: true } });
   const advertEmail = applyEmailFor(app.job, app);
+  // A correction written after the browser's run (e.g. it applied to the wrong advert) outranks the run's own words.
+  const latestNeedsYouNote = app.status === "NEEDS_YOU" ? [...app.events].reverse().find((e) => e.kind === "NEEDS_YOU" && /correction|different vacancy|not this one/i.test(e.detail)) : undefined;
   const latestAttempt = await db.applicationAttempt.findFirst({ where: { applicationId: app.id, kind: "FORM" }, orderBy: { startedAt: "desc" }, select: { id: true, status: true, detail: true, finalUrl: true, mode: true, finishedAt: true, screenshot: true, questions: true } });
 
   return (
@@ -127,7 +129,7 @@ export default async function ApplicationPage({ params, searchParams }: { params
               }
               latest={
                 latestAttempt
-                  ? { status: latestAttempt.status, detail: latestAttempt.detail, finalUrl: latestAttempt.finalUrl, mode: latestAttempt.mode, finishedAt: latestAttempt.finishedAt?.toISOString() ?? null, questions: Array.isArray(latestAttempt.questions) ? (latestAttempt.questions as unknown as OpenQuestion[]) : [], screenshotUrl: latestAttempt.screenshot ? `/app/applications/${app.id}/attempts/${latestAttempt.id}/screenshot.jpg` : null }
+                  ? { status: latestAttempt.status, detail: latestNeedsYouNote && (!latestAttempt.finishedAt || latestNeedsYouNote.createdAt > latestAttempt.finishedAt) ? latestNeedsYouNote.detail : latestAttempt.detail, finalUrl: latestAttempt.finalUrl, mode: latestAttempt.mode, finishedAt: latestAttempt.finishedAt?.toISOString() ?? null, questions: Array.isArray(latestAttempt.questions) ? (latestAttempt.questions as unknown as OpenQuestion[]) : [], screenshotUrl: latestAttempt.screenshot ? `/app/applications/${app.id}/attempts/${latestAttempt.id}/screenshot.jpg` : null }
                   : null
               }
             />

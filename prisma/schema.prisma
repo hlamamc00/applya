@@ -102,6 +102,8 @@ model Profile {
   // Details drafts draw on but never send to an AI provider.
   availability    String   @default("")
   noticePeriod    String   @default("")
+  // How forms' commuting / relocation / "can you work in X" questions are answered.
+  relocation      String   @default("Willing to relocate or commute anywhere in the UK")
   salaryMin       Int?
   salaryMax       Int?
   salaryNote      String   @default("")

@@ -35,7 +35,7 @@ export interface ApplyPacket {
     /** Current or most recent job title. */
     headline: string;
     coverMessage: string;
-    facts: { availability: string; noticePeriod: string; rightToWork: string; salary: string; visaExpiresAt: string };
+    facts: { availability: string; noticePeriod: string; rightToWork: string; relocation: string; salary: string; visaExpiresAt: string };
     cvFileName: string;
     cvPdfBase64: string;
   };
@@ -496,6 +496,10 @@ async function followApplyLink(page: Page, browser: Browser, log: string[], seen
     const score = (el) => {
       const t = text(el).toLowerCase().replace(/\\(this will open in a new (window|tab)[^)]*\\)/g, "").trim();
       if (!t || t.length > 160) return -1;
+      // Other vacancies' cards ("Similar jobs", "Easy Apply … by …") are never the way in.
+      if (el.closest("[class*='similar'], [class*='recommend'], [class*='related'], [id*='similar'], [data-qa*='similar'], aside, footer, nav")) return -1;
+      if (t.length > 60 && !/no thanks|continue to apply|without regist|as a guest/.test(t)) return -1;
+      if (/easy apply|promoted|featured/.test(t) && t.length > 20) return -1;
       const bonus = el.closest("dialog, [role='dialog'], [aria-modal='true']") ? 10 : 0;
       if (/no thanks|apply without|without regist|as a guest|skip (this|registration|and)/.test(t)) return 12 + bonus;
       if (/alert|save|share|sign in|log in|register|sign up|create (an )?account|email this|print/.test(t)) return -1;
@@ -727,6 +731,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
     // 1. Get to the form: follow Apply links, at most 5 hops.
     let fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     const followed = new Set<string>();
+    let sessionReloaded = false;
     const accountWall = async () => {
       const login = loginFor(page, packet.logins);
       if (!login) return finish("NEEDS_YOU", `This site (${new URL(page.url()).hostname}) wants you to sign in or create an account before applying. Add your login for it under Account → Job site logins and try again, or apply there yourself.`);
@@ -740,14 +745,40 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
         const login = loginFor(page, packet.logins)!;
         signedIn = true;
         if (!(await signIn(page, fields, login, log))) return finish("NEEDS_YOU", `Signing in to ${login.host} as ${login.username} didn't work; check the login under Account → Job site logins.`);
+        // Signed in on the advert itself now: it may say this account already applied.
+        if (page.url().split("?")[0] === start.split("?")[0]) {
+          const appliedAfter = await alreadyAppliedNote(page);
+          if (appliedAfter) return finish("ALREADY_APPLIED", `The site says this account has already applied: "${appliedAfter}".`);
+        }
         fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
         followed.clear();
+        continue;
+      }
+      // A board whose session timed out: reload once and try the Apply button again.
+      if (!sessionReloaded && (await page.evaluate(() => /session (has )?expired/i.test([...document.querySelectorAll("dialog, [role='dialog'], [aria-modal='true']")].map((d) => d.textContent || "").join(" "))).catch(() => false))) {
+        sessionReloaded = true;
+        log.push("The site said the session had expired; reloading");
+        await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
+        await settle(page);
+        await dismissCookieBanner(page);
+        followed.clear();
+        const appliedAfter = await alreadyAppliedNote(page);
+        if (appliedAfter) return finish("ALREADY_APPLIED", `The site says this account has already applied: "${appliedAfter}".`);
+        fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
         continue;
       }
       const next = await followApplyLink(page, deps.browser, log, followed);
       if (!next) break;
       page = next;
       await page.setViewport({ width: 1280, height: 1000 }).catch(() => {});
+      // Landed on another advert page (a board's "similar job")? Never apply to the wrong vacancy.
+      if (/\/(job|jobs|vacancy|vacancies|position|careers?)\b/i.test(new URL(page.url()).pathname) && new URL(page.url()).hostname === new URL(start).hostname && page.url().split("?")[0] !== start.split("?")[0]) {
+        const heading = await page.evaluate(() => `${document.title} ${[...document.querySelectorAll("h1")].slice(0, 2).map((h) => h.textContent).join(" ")}`).catch(() => "");
+        if (heading.trim().length > 5 && !titleMatches(packet.job.title, heading)) {
+          log.push(`That link led to a different vacancy ("${heading.replace(/\s+/g, " ").trim().slice(0, 80)}"); not applying there`);
+          return finish("NEEDS_YOU", "The Apply button led to a different vacancy, so the browser stopped rather than apply to the wrong job. Apply on the site yourself with the CV and message from this page.");
+        }
+      }
       fields = (await page.evaluate(EXTRACT_FIELDS)) as FormField[];
     }
     if (looksLikeLogin(fields) && !looksLikeForm(fields)) return (await accountWall()) ?? finish("NEEDS_YOU", "This site wants you to sign in before applying.");

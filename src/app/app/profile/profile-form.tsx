@@ -238,6 +238,9 @@ export function ProfileForm({ initial }: { initial: ProfileInput }) {
           <Field label="Notice period">
             <input className="input" placeholder="None" value={p.noticePeriod} onChange={(e) => set("noticePeriod", e.target.value)} />
           </Field>
+          <Field label="Relocation and commuting" className="sm:col-span-2" hint="How forms' “are you within commuting distance / willing to relocate / can you work in X” questions are answered. Leave as is to say yes to any UK location.">
+            <input className="input" placeholder="Willing to relocate or commute anywhere in the UK" value={p.relocation} onChange={(e) => set("relocation", e.target.value)} />
+          </Field>
           <Field label="Salary from (£)" hint="Leave blank for flexible; drafts use the advert's range or a sensible estimate.">
             <input className="input" type="number" min={0} value={p.salaryMin ?? ""} onChange={(e) => set("salaryMin", e.target.value ? Number(e.target.value) : null)} />
           </Field>

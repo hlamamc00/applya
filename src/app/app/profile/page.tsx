@@ -38,6 +38,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
     extraSections: cv.extraSections,
     availability: profile.availability,
     noticePeriod: profile.noticePeriod,
+    relocation: profile.relocation,
     salaryMin: profile.salaryMin,
     salaryMax: profile.salaryMax,
     salaryNote: profile.salaryNote,

@@ -46,6 +46,7 @@ const profileSchema = z.object({
   extraSections: z.array(z.object({ title: short, items: z.array(z.string().trim().max(600)).max(20) })).max(8),
   availability: short,
   noticePeriod: short,
+  relocation: short,
   salaryMin: z.number().int().min(0).max(10_000_000).nullable(),
   salaryMax: z.number().int().min(0).max(10_000_000).nullable(),
   salaryNote: short,

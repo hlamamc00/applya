@@ -9,7 +9,7 @@ import type { ProfileInput } from "./actions/profile";
 // Either way the person reviews the result in the profile editor before it
 // is saved.
 
-export type ParsedProfile = Omit<ProfileInput, "aiTailoring" | "salaryMin" | "salaryMax" | "salaryNote" | "visaExpiresAt" | "availability" | "noticePeriod" | "rightToWork"> & {
+export type ParsedProfile = Omit<ProfileInput, "aiTailoring" | "salaryMin" | "salaryMax" | "salaryNote" | "visaExpiresAt" | "availability" | "noticePeriod" | "rightToWork" | "relocation"> & {
   /** Which method produced it, for the banner. */
   method: "AI" | "HEURISTIC";
 };
