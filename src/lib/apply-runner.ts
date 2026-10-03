@@ -354,6 +354,24 @@ async function describePage(page: Page) {
     .catch((e) => `unavailable: ${e instanceof Error ? e.message : String(e)}`);
 }
 
+/** Waits (up to 45s) while a site is still processing an upload and keeps its Submit button disabled. */
+async function waitForUploads(page: Page, log: string[]) {
+  for (let i = 0; i < 30; i += 1) {
+    const busy = await page
+      .evaluate(`(() => {
+        const text = (el) => (el.innerText || el.value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+        const processing = /\\b(cv|resume|file|upload)[^.]{0,20}(processing|uploading|checking|scanning)|(processing|uploading)[^.]{0,20}(cv|resume|file)/i.test(document.body.innerText || "");
+        const buttons = [...document.querySelectorAll("button, input[type=submit]")].filter((el) => /submit|apply|send|continue|next|finish/.test(text(el)) && el.offsetParent !== null);
+        const disabledOnly = buttons.length > 0 && buttons.every((el) => el.disabled || el.getAttribute("aria-disabled") === "true");
+        return processing || disabledOnly;
+      })()`)
+      .catch(() => false);
+    if (!busy) return;
+    if (i === 0) log.push("Waiting for the site to finish processing the upload");
+    await sleep(1500);
+  }
+}
+
 /** Ticks a reCAPTCHA "I'm not a robot" box; a challenge afterwards is still a stop. */
 async function tickCaptchaBox(page: Page, log: string[]) {
   for (const frame of page.frames()) {
@@ -693,6 +711,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
         }
       }
       await sleep(1000);
+      if (fields.some((f) => f.type === "file")) await waitForUploads(page, log);
       const open = unanswered(fields, plan);
       const missing = open.map((o) => o.name);
       openQuestions = open.map(({ field, name }) => ({ label: name, type: field.type, options: field.options.map((o) => o.label).slice(0, 40), context: field.context.slice(0, 300) }));
