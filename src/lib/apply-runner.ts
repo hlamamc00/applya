@@ -863,6 +863,18 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       if (packet.dryRun && submit) return finish("PREVIEWED", missing.length ? `Filled in, not submitted (preview). Additional information required: ${missing.join("; ")}.` : "Filled in, not submitted (preview).");
       // Never guess: stop here and ask rather than submit a half-answered form.
       if (missing.length) return finish("NEEDS_YOU", `Additional information required: ${missing.join("; ")}. Answer below and the browser will carry on.`);
+      // Last check before pressing Submit: the page (or its pop-up) must be about this vacancy.
+      if (submit && !packet.dryRun) {
+        const about = await page.evaluate(() => {
+          const dialog = [...document.querySelectorAll("dialog, [role='dialog'], [aria-modal='true']")].find((d) => getComputedStyle(d).display !== "none" && d.getBoundingClientRect().height > 0);
+          const heads = [...document.querySelectorAll("h1, h2")].slice(0, 4).map((h) => h.textContent || "").join(" ");
+          return `${document.title} ${heads} ${dialog ? (dialog.textContent || "").slice(0, 400) : ""}`;
+        }).catch(() => "");
+        if (about.trim().length > 10 && !titleMatches(packet.job.title, about)) {
+          log.push(`The page about to be submitted doesn't look like this vacancy ("${about.replace(/\s+/g, " ").trim().slice(0, 80)}…")`);
+          return finish("NEEDS_YOU", "Stopped before submitting: the form on screen doesn't look like this vacancy (the site may have moved to a different advert). Apply on the site yourself with the CV and message from this page.");
+        }
+      }
       await dismissCookieBanner(page);
       await tickCaptchaBox(page, log);
       if (await hasCaptchaChallenge(page)) return finish("NEEDS_YOU", "The site is showing a CAPTCHA, which has to be solved by a person.");
