@@ -217,7 +217,7 @@ export async function answerQuestions(_: FormState, formData: FormData): Promise
   const app = await db.application.findFirst({ where: { id: str(formData.get("id")), userId: user.id }, include: { job: true, user: { include: { profile: true } } } });
   if (!app) return { error: "Application not found." };
   const given: { question: string; answer: string }[] = [];
-  for (const [key, value] of formData.entries()) {
+  for (const key of formData.keys()) {
     if (!key.startsWith("q:")) continue;
     const question = key.slice(2).trim();
     const answer = formData.getAll(key).map((v) => String(v).trim()).filter(Boolean).join("; ");

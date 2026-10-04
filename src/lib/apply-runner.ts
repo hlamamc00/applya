@@ -708,24 +708,66 @@ async function fillField(page: Page, field: FormField, plan: PlannedValue, cvPat
   log.push(`Filled "${field.label || field.name || field.placeholder}"`);
 }
 
+/**
+ * Words that mean "send this application" or "go to the next step", however a
+ * site phrases them: "Send application", "Submit my CV", "Apply now", "Complete
+ * application", "Confirm and send", "Continue to review", "Next step ›"…
+ */
+const SUBMIT_WORDS = String.raw`\b(submit|send|apply|complete|finish|finali[sz]e|confirm|done|register interest|express interest|upload and apply)\b`;
+const NEXT_WORDS = String.raw`\b(next|continue|proceed|carry on|go on|review|save and continue|save & continue|save and next|go to step|step \d)\b|^save$`;
+// Same words, but about something other than the application.
+const NOT_ACTION = String.raw`cancel|back|previous|sign in|log ?in|log out|register$|create (an )?(account|alert)|alert|newsletter|filter|search|share|save (job|search|for later)|send (this )?(job|to a friend|me)|email (me|this|job)|print|report|subscribe|cookie|accept|reject|manage|close|upload a? ?new|update|edit|remove|delete|similar|recommend|view|see more|read more|apply filters|clear`;
+
 async function findButton(page: Page, kind: "submit" | "next") {
-  const re = kind === "submit" ? "/^(submit|submit application|send application|apply|apply now|send|complete application|finish|submit my application)$|submit/" : "/^(next|continue|next step|save and continue|save|proceed)$|^next\\b|continue/";
+  const words = kind === "submit" ? SUBMIT_WORDS : NEXT_WORDS;
   const handle = await page.evaluateHandle(`(() => {
-    const text = (el) => (el.innerText || el.value || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim().toLowerCase();
-    const all = [...document.querySelectorAll("button, input[type=submit], input[type=button], a, [role=button], [role=link], span, div")].filter((el) => {
+    // The words a person sees: no hidden helper text, arrows or punctuation.
+    const text = (el) => {
+      let t = el.value || "";
+      if (!t) {
+        const copy = el.cloneNode(true);
+        copy.querySelectorAll && copy.querySelectorAll("[class*='visually-hidden'], [class*='sr-only'], [aria-hidden='true'], svg").forEach((n) => n.remove());
+        t = copy.innerText || copy.textContent || el.getAttribute("aria-label") || el.getAttribute("title") || "";
+      }
+      return t.replace(/[›»→>←‹«<|•·]+/g, " ").replace(/[^\\p{L}\\p{N}&' ]+/gu, " ").replace(/\\s+/g, " ").trim().toLowerCase();
+    };
+    const shown = (el) => { const st = getComputedStyle(el); const r = el.getBoundingClientRect(); return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) > 0.05 && r.width > 0 && r.height > 0; };
+    const all = [...document.querySelectorAll("button, input[type=submit], input[type=button], input[type=image], a, [role=button], [role=link], span, div")].filter((el) => {
       if (/^(BUTTON|INPUT)$/.test(el.tagName) || el.getAttribute("role") === "button") return true;
       // Links and styled elements only when they look like a button and are the innermost such thing.
       return getComputedStyle(el).cursor === "pointer" && !el.querySelector("button, a, input, [role=button]") && text(el).length < 40;
     });
-    const visible = (el) => (el.offsetParent !== null || getComputedStyle(el).position === "fixed") && !el.disabled;
-    const re = ${re};
-    const inDialog = (el) => Boolean(el.closest("dialog, [role=dialog], [aria-modal=true]"));
-    const dialogOpen = [...document.querySelectorAll("dialog, [role=dialog], [aria-modal=true]")].some((d) => d.offsetParent !== null || getComputedStyle(d).position === "fixed");
-    // With a pop-up open, only its own buttons count: the page's "Apply now" is behind it.
-    const ok = all.filter((el) => visible(el) && re.test(text(el)) && !/cancel|back|previous|sign in|log in/.test(text(el)) && (!dialogOpen || inDialog(el)));
-    // The most specific wording wins: "submit application" over a page's own "apply now".
-    const rank = (el) => { const t = text(el); return (inDialog(el) ? 10 : 0) + (/submit|send|complete|finish/.test(t) ? 2 : /continue|next/.test(t) ? 1 : 0); };
-    return ok.sort((a, b) => rank(b) - rank(a))[0] || null;
+    const usable = (el) => shown(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true";
+    const want = new RegExp(${JSON.stringify(words)}, "i");
+    const avoid = new RegExp(${JSON.stringify(NOT_ACTION)}, "i");
+    const dialogs = [...document.querySelectorAll("dialog, [role=dialog], [role=alertdialog], [aria-modal=true]")]
+      // An open pop-up is one actually on screen, not a cookie or consent box.
+      .filter((d) => shown(d) && !/cookie|consent|privacy|gdpr/i.test((d.id || "") + " " + (d.className || "") + " " + (d.textContent || "").slice(0, 300)));
+    const inOpenDialog = (el) => dialogs.some((d) => d.contains(el));
+    const candidates = all.filter((el) => usable(el) && text(el).length > 0 && text(el).length <= 60 && want.test(text(el)) && !avoid.test(text(el)));
+    // With a pop-up open that has its own way forward (submit or continue),
+    // nothing behind it counts: the page's "Apply now" isn't this step's button.
+    const anyAction = new RegExp(${JSON.stringify(SUBMIT_WORDS)} + "|" + ${JSON.stringify(NEXT_WORDS)}, "i");
+    const dialogHasAction = all.some((el) => inOpenDialog(el) && usable(el) && anyAction.test(text(el)) && !avoid.test(text(el)));
+    const pool = dialogHasAction ? candidates.filter(inOpenDialog) : candidates;
+    const filled = document.querySelector("[data-applya]");
+    const sameForm = (el) => Boolean(filled && filled.closest("form") && filled.closest("form") === el.closest("form"));
+    const rank = (el) => {
+      const t = text(el);
+      let r = 0;
+      if (inOpenDialog(el)) r += 10;
+      if (sameForm(el)) r += 6;
+      if (el.type === "submit") r += 3;
+      if (/submit|send|complete|finish|confirm/.test(t)) r += 2;
+      if (/application|cv|resume|my details/.test(t)) r += 1;
+      return r;
+    };
+    let best = pool.sort((a, b) => rank(b) - rank(a))[0] || null;
+    // Whatever it's called, the form we filled in has its own submit button.
+    if (!best && ${kind === "submit" ? "true" : "false"} && filled && filled.closest("form")) {
+      best = [...filled.closest("form").querySelectorAll("button[type=submit], input[type=submit], button:not([type])")].find((el) => usable(el) && !avoid.test(text(el))) || null;
+    }
+    return best;
   })()`);
   return handle.asElement() as ElementHandle<HTMLElement> | null;
 }
@@ -958,7 +1000,7 @@ async function runApplyAt(packet: ApplyPacket, deps: RunnerDeps, start: string, 
       await nav;
       // A confirmation can take a moment (a redirect, then an "Application sent!"
       // pop-up): keep reading for up to 15 seconds before deciding.
-      const SUCCESS = /thank you for (your )?(applying|application|interest)|thanks for applying|application (has been |was |is )?(received|submitted|sent|complete|successful)|application sent|has been sent to|we have received your application|successfully (submitted|applied|sent)|you have (successfully )?applied|application confirmed|your application has gone|your application is (now )?(with|on its way)/i;
+      const SUCCESS = /thank(s| you)[^.!]{0,40}(appl(y|ying|ication)|interest|cv|submi)|application (has been |was |is |successfully )?(received|submitted|sent|complete|completed|successful|forwarded|on its way|now with)|application sent|application (complete|submitted)!?|(cv|details|application) (has|have) been (sent|submitted|received|forwarded|shared)|has been sent to|we('ve| have) (got|received) your (application|cv|details)|successfully (submitted|applied|sent|uploaded and sent)|you('ve| have) (successfully )?(applied|submitted)|application confirmed|your application (has gone|is (now )?(with|on its way|being reviewed))|we('ll| will) be in touch|(recruiter|employer|hiring team|consultant) will (be in touch|contact you|review)/i;
       let after = await pageText(page);
       let success = false;
       for (let wait = 0; wait < 6; wait += 1) {
